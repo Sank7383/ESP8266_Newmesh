@@ -936,21 +936,23 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
 // "mesh AP" mode anymore — one AP, one identity, built from the runtime
 // asccode+machineid so it changes live when those settings change.
 bool apInitialized = false;
+uint8_t lastApOctet3 = 0xFF;   // 0xFF = "never computed yet", forces the first setup_AP() call through
 void setup_AP(bool forceRestart)
 {
   if(manulalAP==true) return ;
-  if (apInitialized && !forceRestart)
-    return;
-  apInitialized = true;
 
-  uint8_t gw1 = 192, gw2 = 168;
-  uint8_t octet3 = 100 + (myConfig.machineid & 0xFF);
-  if (isConnected())
-  {
-    gw1 = WiFi.gatewayIP()[0];
-    gw2 = WiFi.gatewayIP()[1];
-  }
+  // Subnet reflects live connection state (192.168.6.x standalone,
+  // 192.168.(100+id).x once bridged to a real upstream network — matches
+  // the pre-rewrite behavior) even though the AP's SSID/identity never
+  // changes. Re-run this (forceRestart=true) whenever connection state
+  // changes; skip the actual softAP reconfig if nothing would change.
+  uint8_t octet3 = isConnected() ? (100 + (myConfig.machineid & 0xFF)) : 6;
   if (octet3 > 250 || octet3 == 0) octet3 = 6;
+
+  if (apInitialized && !forceRestart) return;
+  if (apInitialized && octet3 == lastApOctet3) return;   // nothing actually changed
+  apInitialized = true;
+  lastApOctet3 = octet3;
 
   apIP = IPAddress(192, 168, octet3, 1);
   IPAddress apGateway(apIP);
@@ -1000,6 +1002,7 @@ void connectWiFiEvents()
                                                   }
                                                 }
                                                 amServer = AmServer();
+                                                setup_AP(true);   // re-evaluate AP subnet now that STA is bridged (SSID unchanged)
                                                 if (WiFi.SSID().startsWith(MESHNETWORK) || WiFi.SSID().startsWith("NETSOL") || WiFi.SSID().startsWith("NOW_")  )
                                                 {
                                                   if (WiFi.SSID().startsWith("NETSOL") || WiFi.SSID().startsWith("NOW_") )
@@ -1053,7 +1056,9 @@ if (!myConfig.socketio){
                                                               amServer = AmServer();
                                                               webSocketClient.setReconnectInterval(300000);
                                                               if (webSocketClient.isConnected()) webSocketClient.disconnect();
-                                                              // AP stays up regardless of STA connection state.
+                                                              // AP stays up regardless of STA connection state — only its
+                                                              // subnet falls back to standalone (192.168.6.x); SSID unchanged.
+                                                              setup_AP(true);
                                                               myruntime = nowmillis+10000;
                                                             });
 }
@@ -1255,7 +1260,10 @@ void startconnection()
               getCurrentStatus1(msgp, sizeof(msgp));
               String msgs=String(msgp);
               msgs.replace(",", "<br>");
-              server.send(200, "text/html", msgs + F("<br><a href='/forms'>Forms</a><br><a href='/reboot'>Reboot</a><br><a href='/debug'>Debug</a>"));
+              // Settings are configured over the WebSocket form protocol
+              // (see DeviceProtocol.cpp), not a browser HTML page — only
+              // link to routes that actually have a handler registered.
+              server.send(200, "text/html", msgs + F("<br><a href='/reboot'>Reboot</a>"));
             });
 
   server.on("/refreshlist", HTTP_GET, []()

@@ -98,6 +98,21 @@ bool configLoad() {
     return false;
   }
   if (myConfig.machineid < 0) myConfig.machineid = 0;
+
+  // Defense-in-depth beyond the structVersion gate above: a stray bit-flip
+  // or partial EEPROM write could otherwise leave routeType/buttonVariant
+  // holding a value with no corresponding case in ButtonInputFactory/
+  // TransportFactory. Both factories already fail safe (nullptr / mesh
+  // fallback) rather than crash, but the intended, always-reachable-via-
+  // settings-form default variant is WiFi mesh + 5-button — fall back to
+  // that explicitly rather than leaving a device stuck with no buttons.
+  if (myConfig.routeType > (uint8_t)RouteType::ETHERNET) {
+    myConfig.routeType = (uint8_t)RouteType::MESH_WIFI;
+  }
+  if (myConfig.buttonVariant > (uint8_t)ButtonVariant::GPIO_3BTN_RMT) {
+    myConfig.buttonVariant = (uint8_t)ButtonVariant::SHIFTREG_5BTN;
+  }
+
   return true;
 }
 
