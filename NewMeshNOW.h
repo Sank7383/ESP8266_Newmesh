@@ -1040,7 +1040,7 @@ void connectWiFiEvents()
 #endif
 #ifdef NURSECALLNEW
 if (!myConfig.socketio){
-                                                  if (strlen(myConfig.myServer) > 10 && strlen(myConfig.myServer) < 20 && isConnected())
+                                                  if (strlen(myConfig.myServer) > 0 && isConnected())
                                                   {
                                                     webSocketClient.begin(myConfig.myServer, myConfig.myPort, "/","");
                                                     webSocketClient.onEvent(webSocketEventClient);
@@ -1280,6 +1280,13 @@ function renderForm(msg) {
         if (o.value === f.value) opt.selected = true;
         input.appendChild(opt);
       });
+    } else if (f.label === "Debug") {
+      input = document.createElement("textarea");
+      input.readOnly = true;
+      input.rows = 8;
+      input.style.fontFamily = "monospace";
+      input.style.fontSize = "13px";
+      input.value = f.value.split(" | ").join("\n");
     } else {
       input = document.createElement("input");
       input.type = "text";

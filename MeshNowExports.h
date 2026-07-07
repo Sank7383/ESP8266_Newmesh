@@ -21,6 +21,8 @@ extern unsigned long nowmillis;
 extern uint8_t espnowaval;
 extern bool esp8266_now_active;
 extern IPAddress apIP;
+extern int wscdisconnect;       // consecutive uplink-reconnect count, see webSocketEventClient
+extern unsigned long lst_wscon; // millis() timestamp of the last successful uplink connect (0 = never)
 
 bool AmServer();
 bool isConnected();
