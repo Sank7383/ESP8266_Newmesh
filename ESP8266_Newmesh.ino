@@ -35,9 +35,11 @@
 #include "TransportFactory.h"
 #include "LocalAccessStack.h"
 #include "DeviceState.h"
+#include "BuzzerController.h"
 
 CallStateMachine::CallStatus g_callStatus;
 LedAggregator g_roomAggregator;
+BuzzerController g_buzzer;
 
 static LedStripController s_ledStripController;
 
@@ -51,6 +53,7 @@ void setup() {
 
   configLoad();
   g_roomAggregator.begin();
+  g_buzzer.begin();
 
   g_buttonInput   = ButtonInputFactory::create(myConfig);   // nullptr for DeviceRole::DOOR_INDICATOR
   g_ledController = &s_ledStripController;
@@ -74,6 +77,12 @@ void loop() {
   if (g_buttonInput) {
     ButtonEvent ev;
     if (g_buttonInput->poll(now, ev)) {
+      // Audible feedback fires on every real button press, regardless of
+      // whether the resulting state transition turns out to be legal —
+      // PALM_ATTACHED is an accessory-presence signal, not a press, so it
+      // stays silent.
+      if (ev.action != ButtonAction::PALM_ATTACHED) g_buzzer.trigger(now);
+
       bool legal = CallStateMachine::apply(
           g_callStatus, ev.action, ev.isLongPress,
           bedToiletShareUnit(myConfig), myConfig.ruleset, myConfig.houseKeepings);
@@ -87,6 +96,7 @@ void loop() {
     }
   }
 
+  g_buzzer.tick(now);
   g_ledController->setCallZone(g_callStatus, myConfig.ruleset);
   g_ledController->setAggregateZone(g_roomAggregator.roomStates(), g_roomAggregator.count());
   g_ledController->tick(now);

@@ -485,7 +485,10 @@ void sendToAll(const char *msg, int isServer)
   if (amServer)
   {
     if (s.indexOf("EVENT:")<0 && s.indexOf("s")!=0) {
-      if (isConnected())
+      // Local AP-connected clients (this device's own WebSocket server,
+      // port 81) are always reachable regardless of whether STA has
+      // joined an upstream network — isConnected() must NOT gate this,
+      // only whether ESP-NOW mesh forwarding also makes sense below.
       webSocket.broadcastTXT(s.c_str());
 #ifdef ESPNOWACTIVE
   sendMeshMessage(0,s.c_str(),1);
@@ -701,9 +704,18 @@ void decodeString1(const char *msm, int isServer)
 
   if (isServer == 1)
   {
+    // A directly-connected local client (this device's own WebSocket
+    // server, port 81) is unambiguously talking to exactly this one
+    // device — no "<thisDeviceID>=" address prefix required. Commands
+    // like "Test"/"GS"/"RESPONSE:..." fall straight through to the
+    // dispatch block below as-is.
   }
   else if (isServer == 0 || isServer == 2)
   {
+    // Relayed/mesh-origin traffic (this device acting as an uplink client,
+    // or a message forwarded over ESP-NOW) DOES need the address prefix
+    // stripped, since a shared medium can carry messages meant for other
+    // devices too.
     debugdata(String("Received by Client from above ").c_str());
     debugdata(msm);
     if (strstr(msm,"EVENT:")) return;
@@ -716,36 +728,36 @@ void decodeString1(const char *msm, int isServer)
       decodeString(msm, 0);
       return;
     }
-  }
 
-  char buf[1024];
+    char buf[1024];
+    sprintf_P(buf, PSTR("%s="),ID.c_str());
 
-  sprintf_P(buf, PSTR("%s="),ID.c_str());
-
-  if (strncmp(msm,buf,strlen(buf))==0)
-  {
-    msm = msm+strlen(buf);
-  }
-  else
-  {
+    if (strncmp(msm,buf,strlen(buf))==0)
+    {
+      msm = msm+strlen(buf);
+    }
+    else
+    {
 #ifdef MASTERCONTROLLER
-  if (strncmp(msm,"s",1)==0){
-    decodeString(msm,0);
-  }
+      if (strncmp(msm,"s",1)==0){
+        decodeString(msm,0);
+      }
 #endif
 #ifdef NURSECALLNEW
-  if (strncmp(msm,"j",1)==0){
-    decodeString(msm,0);
-  }
-  if (strncmp(msm,"os",2)==0 && *(msm+strlen(msm)-1)=='9'){
-    decodeString(msm,0);
-  }
-  if (strstr(msm,"=s")){
-    decodeString(msm,0);
-  }
+      if (strncmp(msm,"j",1)==0){
+        decodeString(msm,0);
+      }
+      if (strncmp(msm,"os",2)==0 && *(msm+strlen(msm)-1)=='9'){
+        decodeString(msm,0);
+      }
+      if (strstr(msm,"=s")){
+        decodeString(msm,0);
+      }
 #endif
-    return;
+      return;
+    }
   }
+
   if (!strncmp(msm,"SOCKETCLIENTCONNECTED",10))
   {
     devicelist=1;
@@ -928,31 +940,32 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t *payload, size_t length)
 }
 
 // ==========================================
-// AP identity — single, always-on
+// AP identity — always-on, two live states
 // ==========================================
 // The device runs AP+STA concurrently at all times, regardless of which
 // route (WiFi mesh / RS485 / Ethernet) is selected, so on-site staff can
-// always reach the settings page. There is no separate "config AP" vs
-// "mesh AP" mode anymore — one AP, one identity, built from the runtime
-// asccode+machineid so it changes live when those settings change.
+// always reach the settings page — the AP never turns off. Its IDENTITY
+// does still reflect live connection state, matching the pre-rewrite
+// behavior: standalone (no upstream network joined) broadcasts
+// "NETE<asccode><id>" on 192.168.6.x; once bridged to a real upstream
+// WiFi network it switches to "MESH<asccode><id>" on 192.168.(100+id).x
+// so other mesh nodes can find it. Both asccode/id are read live, so a
+// settings change takes effect the next time this re-evaluates.
 bool apInitialized = false;
-uint8_t lastApOctet3 = 0xFF;   // 0xFF = "never computed yet", forces the first setup_AP() call through
+bool lastApConnectedState = false;   // forces the first setup_AP() call through
 void setup_AP(bool forceRestart)
 {
   if(manulalAP==true) return ;
 
-  // Subnet reflects live connection state (192.168.6.x standalone,
-  // 192.168.(100+id).x once bridged to a real upstream network — matches
-  // the pre-rewrite behavior) even though the AP's SSID/identity never
-  // changes. Re-run this (forceRestart=true) whenever connection state
-  // changes; skip the actual softAP reconfig if nothing would change.
-  uint8_t octet3 = isConnected() ? (100 + (myConfig.machineid & 0xFF)) : 6;
-  if (octet3 > 250 || octet3 == 0) octet3 = 6;
+  bool connected = isConnected();
 
   if (apInitialized && !forceRestart) return;
-  if (apInitialized && octet3 == lastApOctet3) return;   // nothing actually changed
+  if (apInitialized && connected == lastApConnectedState) return;   // nothing actually changed
   apInitialized = true;
-  lastApOctet3 = octet3;
+  lastApConnectedState = connected;
+
+  uint8_t octet3 = connected ? (100 + (myConfig.machineid & 0xFF)) : 6;
+  if (octet3 > 250 || octet3 == 0) octet3 = 6;
 
   apIP = IPAddress(192, 168, octet3, 1);
   IPAddress apGateway(apIP);
@@ -960,8 +973,10 @@ void setup_AP(bool forceRestart)
   WiFi.softAPdisconnect(true);
   WiFi.softAPConfig(apIP, apGateway, apSubmask);
 
-  String apSsid = "NETE" + String(myConfig.asccode) + String(myConfig.machineid);
-  WiFi.softAP(apSsid.c_str(), "Netsol@123", myConfig.wifiChannel ? myConfig.wifiChannel : 1, 0, 4);
+  String apSsid = connected ? (MESHNETWORK + String(myConfig.asccode) + String(myConfig.machineid))
+                             : ("NETE" + String(myConfig.asccode) + String(myConfig.machineid));
+  const char *apPassword = connected ? "MESHPASSWORD" : "Netsol@123";
+  WiFi.softAP(apSsid.c_str(), apPassword, myConfig.wifiChannel ? myConfig.wifiChannel : 1, 0, 4);
   dbgPrintln(1, "Initialized AP as IP '" + apIP.toString() + "' SSID " + apSsid);
 }
 
@@ -1170,6 +1185,131 @@ void tdinputn(const char *spanstring,
         required, nameid, nameid, valuestring, maxlength);
 }
 
+// ==========================================
+// /forms — minimal browser client for the WebSocket settings-form protocol
+// ==========================================
+// This is the ONLY UI for viewing/changing settings now that the old
+// HTML-form-generator page is gone. It speaks the exact same
+// $NEXT$/$DONE$/$T|/$D|/$R| + "RESPONSE:formid|argk|value ..." protocol
+// DeviceProtocol.cpp's sendFormData()/getFormData() already implement — no
+// separate companion app is required, any browser works.
+const char FORMS_PAGE[] PROGMEM = R"rawliteral(
+<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Nurse Call Settings</title>
+<style>
+body{font-family:sans-serif;margin:0;padding:16px;background:#f4f4f4;color:#222}
+h2{margin-top:0}
+.field{margin-bottom:12px}
+label{display:block;font-weight:bold;margin-bottom:4px;font-size:14px}
+input,select{width:100%;padding:8px;box-sizing:border-box;font-size:16px}
+button{padding:10px 16px;font-size:15px;margin:4px 6px 4px 0;cursor:pointer}
+#menu button{display:block;width:100%;text-align:left;margin-bottom:6px}
+#status{color:#666;font-size:13px;margin-bottom:14px}
+</style></head>
+<body>
+<h2>Nurse Call Settings</h2>
+<div id="status">Connecting...</div>
+<div id="app"></div>
+<script>
+var ws, formId = -1;
+function setStatus(s) { document.getElementById("status").textContent = s; }
+function send(s) { if (ws && ws.readyState === 1) ws.send(s); }
+function connect() {
+  ws = new WebSocket("ws://" + location.hostname + ":81/");
+  ws.onopen = function () { setStatus("Connected, loading menu..."); };
+  ws.onclose = function () { setStatus("Disconnected - retrying..."); setTimeout(connect, 2000); };
+  ws.onerror = function () { setStatus("Connection error"); };
+  ws.onmessage = function (e) { handleMessage(e.data); };
+}
+function handleMessage(raw) {
+  var msg = raw;
+  var eq = msg.indexOf("=");
+  if (eq > 0 && eq < 20 && msg.indexOf("FORM:") !== 0 && msg.indexOf("Connected") !== 0) {
+    msg = msg.substring(eq + 1);
+  }
+  if (msg.indexOf("Connected:") === 0) { send("Test"); return; }
+  if (msg.indexOf("FORM:") === 0) { renderForm(msg); return; }
+}
+function renderForm(msg) {
+  var body = msg.substring(5);
+  var idEnd = body.indexOf("$");
+  formId = parseInt(body.substring(0, idEnd), 10);
+  var tokens = body.substring(idEnd).split("$").filter(function (t) { return t.length > 0; });
+  var title = "Settings", fields = [], isMenu = false, menuOptions = [];
+  tokens.forEach(function (tok) {
+    if (tok.indexOf("NEXT$") === 0 || tok.indexOf("DONE$") === 0) {
+      title = tok.substring(5);
+    } else if (tok.indexOf("T|") === 0) {
+      var p = tok.substring(2).split("|");
+      fields.push({ type: "T", label: p[0], value: decodeURIComponent(p[2] || "") });
+    } else if (tok.indexOf("D|") === 0) {
+      var p = tok.substring(2).split("|");
+      var opts = p[1].split("#").map(function (o) { var kv = o.split(":"); return { label: kv[0], value: kv[1] }; });
+      fields.push({ type: "D", label: p[0], options: opts, value: p[2] });
+    } else if (tok.indexOf("R|") === 0) {
+      var p = tok.substring(2).split("|");
+      isMenu = true;
+      menuOptions = p[1].split("#").map(function (o) { var kv = o.split(":"); return { label: kv[0], value: kv[1] }; });
+    }
+  });
+  var app = document.getElementById("app");
+  app.innerHTML = "";
+  var h = document.createElement("h3"); h.textContent = title; app.appendChild(h);
+  setStatus("Form " + formId + " loaded");
+  if (isMenu) {
+    var div = document.createElement("div"); div.id = "menu";
+    menuOptions.forEach(function (o) {
+      var b = document.createElement("button");
+      b.textContent = o.label;
+      b.onclick = function () { send("RESPONSE:0|0 0|" + o.value); };
+      div.appendChild(b);
+    });
+    app.appendChild(div);
+    return;
+  }
+  var form = document.createElement("div");
+  fields.forEach(function (f, i) {
+    var wrap = document.createElement("div"); wrap.className = "field";
+    var lab = document.createElement("label"); lab.textContent = f.label; wrap.appendChild(lab);
+    var input;
+    if (f.type === "D") {
+      input = document.createElement("select");
+      f.options.forEach(function (o) {
+        var opt = document.createElement("option");
+        opt.value = o.value; opt.textContent = o.label;
+        if (o.value === f.value) opt.selected = true;
+        input.appendChild(opt);
+      });
+    } else {
+      input = document.createElement("input");
+      input.type = "text";
+      input.value = f.value;
+    }
+    input.dataset.idx = i;
+    wrap.appendChild(input);
+    form.appendChild(wrap);
+  });
+  app.appendChild(form);
+  var saveBtn = document.createElement("button");
+  saveBtn.textContent = "Save";
+  saveBtn.onclick = function () {
+    var inputs = form.querySelectorAll("input,select");
+    var parts = ["RESPONSE:" + formId + "|" + formId];
+    inputs.forEach(function (inp) { parts.push(inp.dataset.idx + "|" + encodeURIComponent(inp.value)); });
+    send(parts.join(" "));
+    setStatus("Saved, reloading...");
+  };
+  app.appendChild(saveBtn);
+  var backBtn = document.createElement("button");
+  backBtn.textContent = "Back to Menu";
+  backBtn.onclick = function () { send("Test"); };
+  app.appendChild(backBtn);
+}
+connect();
+</script>
+</body></html>
+)rawliteral";
+
 uint32_t ith=0;
 uint32_t getInternalBootCode()
 {
@@ -1221,6 +1361,10 @@ void startconnection()
   webSocket.enableHeartbeat(3000, 3000, 2);
   webSocket.onEvent(webSocketEvent);
 
+  server.on("/forms", []()
+            {
+              server.send_P(200, "text/html", FORMS_PAGE);
+            });
   server.on("/reboot", []()
             {
               server.send(200, "text/html", "OK");
@@ -1260,10 +1404,7 @@ void startconnection()
               getCurrentStatus1(msgp, sizeof(msgp));
               String msgs=String(msgp);
               msgs.replace(",", "<br>");
-              // Settings are configured over the WebSocket form protocol
-              // (see DeviceProtocol.cpp), not a browser HTML page — only
-              // link to routes that actually have a handler registered.
-              server.send(200, "text/html", msgs + F("<br><a href='/reboot'>Reboot</a>"));
+              server.send(200, "text/html", msgs + F("<br><a href='/forms'>Settings</a><br><a href='/reboot'>Reboot</a>"));
             });
 
   server.on("/refreshlist", HTTP_GET, []()

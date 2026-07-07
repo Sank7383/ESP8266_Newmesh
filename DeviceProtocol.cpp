@@ -2,6 +2,7 @@
 #include "NurseCallConfig.h"
 #include "MeshNowExports.h"
 #include "DeviceState.h"
+#include <ESP8266WiFi.h>
 #include <string.h>
 #include <ctype.h>
 
@@ -109,7 +110,7 @@ void sendFormData(int formno) {
 
   if (formno == 0) {
     msg = "FORM:0$NEXT$Select$R|Select Settings|"
-          "Network:1#Device:2#LED:3#RS485:4#Mesh:5#Info:7#Role and Route:11#Buttons:12#Ruleset:13#Reboot:20#Factory Reset:21|1|0";
+          "Network:1#Device:2#LED:3#RS485:4#Mesh:5#Info:7#Role and Route:11#Buttons:12#Ruleset:13#Debug:14#Reboot:20#Factory Reset:21|1|0";
   }
   else if (formno == 1) {
     msg = "FORM:1$DONE$Network Settings";
@@ -120,6 +121,9 @@ void sendFormData(int formno) {
     appendDropdown(msg, "Uplink Protocol", "WebSocket:0#SocketIO:1", myConfig.socketio ? 1 : 0);
     appendText(msg, "Server Host", myConfig.myServer);
     appendText(msg, "Server Port", String(myConfig.myPort));
+    appendText(msg, "Static IP (blank = DHCP)", myConfig.myIP);
+    appendText(msg, "Gateway", myConfig.myGateway);
+    appendText(msg, "Subnet Mask", myConfig.myNetmask);
   }
   else if (formno == 2) {
     msg = "FORM:2$DONE$Device Settings";
@@ -180,6 +184,26 @@ void sendFormData(int formno) {
     appendText(msg, "Custom State Reported Code", String(myConfig.ruleset.customState.reportedCode));
     appendText(msg, "Custom State LED Color Index (0-7)", String(myConfig.ruleset.customState.ledColorIndex));
   }
+  else if (formno == 14) {
+    // Read-only network diagnostics — the answer to "where can I see the
+    // WiFi name, AP name, IPs" etc. All values are read live from the
+    // WiFi stack each time this page is requested, not cached.
+    msg = "FORM:14$DONE$Debug";
+    appendText(msg, "Upstream WiFi SSID", WiFi.status() == WL_CONNECTED ? WiFi.SSID() : String("(not connected)"));
+    appendText(msg, "Upstream WiFi RSSI", WiFi.status() == WL_CONNECTED ? String(WiFi.RSSI()) + " dBm" : String("-"));
+    appendText(msg, "Station IP", WiFi.localIP().toString());
+    appendText(msg, "Gateway IP", WiFi.gatewayIP().toString());
+    appendText(msg, "AP SSID (current)", WiFi.softAPSSID());
+    appendText(msg, "AP IP", WiFi.softAPIP().toString());
+    appendText(msg, "AP Clients Connected", String(WiFi.softAPgetStationNum()));
+    appendText(msg, "Role", isConnected() ? "Bridged (has upstream link)" : "Standalone (AP-only)");
+    appendText(msg, "Am Server", String(amServer ? 1 : 0));
+    appendText(msg, "Ethernet Active", String(ethercon));
+    appendText(msg, "ESP-NOW Mesh Active", String(meshLayerActive() ? 1 : 0));
+    appendText(msg, "Route Type", String(myConfig.routeType));
+    appendText(msg, "Free Heap", String(ESP.getFreeHeap()));
+    appendText(msg, "Uptime (s)", String(millis() / 1000));
+  }
   else {
     return;
   }
@@ -212,7 +236,7 @@ void getFormData(const char *formdata1, int socketnumber) {
         if (argk == 0) {
           int sel = argv.toInt();
           if (sel >= 1 && sel <= 5) { sendFormData(sel); return; }
-          if (sel == 7 || sel == 11 || sel == 12 || sel == 13) { sendFormData(sel); return; }
+          if (sel == 7 || sel == 11 || sel == 12 || sel == 13 || sel == 14) { sendFormData(sel); return; }
           if (sel == 20) { ESPrestart(); return; }
           if (sel == 21) { configApplyDefaults(myConfig); configSave(); ESPrestart(); return; }
         }
@@ -225,6 +249,9 @@ void getFormData(const char *formdata1, int socketnumber) {
         else if (argk == 4) myConfig.socketio = (clampEnum(argv.toInt(), 1) == 1);
         else if (argk == 5) copyString(myConfig.myServer, argv, sizeof(myConfig.myServer));
         else if (argk == 6) myConfig.myPort = argv.toInt();
+        else if (argk == 7) copyString(myConfig.myIP, argv, sizeof(myConfig.myIP));
+        else if (argk == 8) copyString(myConfig.myGateway, argv, sizeof(myConfig.myGateway));
+        else if (argk == 9) copyString(myConfig.myNetmask, argv, sizeof(myConfig.myNetmask));
       }
       else if (formid == 2) {
         if (argk == 0) copyString(myConfig.myDeviceName, argv, sizeof(myConfig.myDeviceName));
@@ -286,6 +313,13 @@ void getFormData(const char *formdata1, int socketnumber) {
       }
     }
     command = strtok(NULL, " ");
+  }
+
+  if (formid == 14) {
+    // Debug is a read-only diagnostics view — nothing to persist, just
+    // re-send the (freshly-read-live) page if the client re-submits it.
+    sendFormData(14);
+    return;
   }
 
   if (formid > 0) {
