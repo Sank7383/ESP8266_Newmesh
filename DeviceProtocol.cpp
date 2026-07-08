@@ -131,6 +131,7 @@ void sendFormData(int formno) {
     appendText(msg, "Toilet ID", String(myConfig.toiletid));
     appendText(msg, "Door Indicator ID", String(myConfig.doorIndicatorId));
     appendDropdown(msg, "Allow Reboot", "No:0#Yes:1", myConfig.allowReboot ? 1 : 0);
+    appendText(msg, "Status Report Interval Sec (multiple of 10, min 10)", String(myConfig.statusReportIntervalSec));
   }
   else if (formno == 3) {
     msg = "FORM:3$DONE$LED Settings";
@@ -289,6 +290,12 @@ void getFormData(const char *formdata1, int socketnumber) {
         else if (argk == 1) myConfig.toiletid = argv.toInt();
         else if (argk == 2) myConfig.doorIndicatorId = (uint32_t)argv.toInt();
         else if (argk == 3) myConfig.allowReboot = (clampEnum(argv.toInt(), 1) == 1);
+        else if (argk == 4) {
+          long secs = argv.toInt();
+          if (secs < 10) secs = 10;
+          secs = ((secs + 5) / 10) * 10;   // round to nearest multiple of 10
+          myConfig.statusReportIntervalSec = (uint32_t)secs;
+        }
       }
       else if (formid == 3) {
         if (argk == 0) {

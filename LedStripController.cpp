@@ -116,7 +116,17 @@ void LedStripController::setCallZone(const CallStateMachine::CallStatus &status,
   // affects the LOCAL LED, see repaint()). A distinct toiletid never
   // reaches this — that case is leds_[1]-only, fed by setToiletRemoteStatus().
   bool bedZoneActive = (status.mainState != CallState::IDLE) || (bedToiletShareUnit_ && status.toiletCallActive);
-  blink_.setEnabled(status.housekeeping && bedZoneActive);
+  // CODE_BLUE is the one state that does NOT dual-blink under housekeeping
+  // — per spec it shows steady blue only, even though the housekeeping
+  // flag (status.housekeeping) stays true internally the whole time (see
+  // CallStateMachine::reportedStatusCode() for the matching reported-code
+  // exception). Disabling blink_ here makes repaint() fall through to
+  // ownActiveColor() unconditionally for this state — BlinkController
+  // forces isOn()==true whenever it's disabled, so no separate "steady
+  // blue" branch is needed in repaint() itself. Every OTHER active state
+  // (CALL/CARE/EXTRA_HELP/TOILET_CALL-mirror) still dual-blinks as before.
+  bool blinkEligible = bedZoneActive && (status.mainState != CallState::CODE_BLUE);
+  blink_.setEnabled(status.housekeeping && blinkEligible);
 
   dirty_ = true;
 }

@@ -188,6 +188,11 @@ struct DeviceConfig {
   // fully off regardless of Default LED On. Only affects the no-call idle
   // display — an actual active toilet call always shows regardless of this.
   bool              toiletIndicationOnIdle;
+  // Periodic full-status resend to the server, independent of button
+  // events — whole seconds, validated/rounded to a multiple of 10 (min 10)
+  // in DeviceProtocol.cpp's Form 2 parser. See the .ino's loop() for where
+  // this drives the actual resend.
+  uint32_t          statusReportIntervalSec;
 };
 
 extern DeviceConfig myConfig;

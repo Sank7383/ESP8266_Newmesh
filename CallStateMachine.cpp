@@ -141,6 +141,21 @@ uint8_t reportedStatusCode(const CallStatus &status, const CallRulesetConfig &ru
   bool anyActiveCall = (status.mainState != CallState::IDLE) || status.toiletCallActive;
 
   if (status.housekeeping) {
+    // EXTRA_HELP/CODE_BLUE + housekeeping are the two exceptions to the
+    // blanket "any active call + housekeeping = 8" collapse below — the
+    // server needs to see the SPECIFIC escalation code, not just the
+    // generic combo number, so these two report their own mainState code
+    // even with housekeeping set. (CALL/CARE/TOILET_CALL + housekeeping
+    // still collapse to HOUSEKEEPING_CALL(8) — add another `if` here,
+    // same shape, for any other state that needs its own reported code
+    // instead of collapsing.) The housekeeping FLAG itself is untouched
+    // either way — status.housekeeping stays true, this only changes what
+    // number gets reported; LedStripController::setCallZone() is the
+    // separate place that decides whether the LED still dual-blinks for a
+    // given mainState under housekeeping (see that file for CODE_BLUE's
+    // "steady blue, no blink" exception).
+    if (status.mainState == CallState::EXTRA_HELP) return (uint8_t)CallState::EXTRA_HELP;
+    if (status.mainState == CallState::CODE_BLUE)  return (uint8_t)CallState::CODE_BLUE;
     return anyActiveCall ? (uint8_t)CallState::HOUSEKEEPING_CALL : (uint8_t)CallState::HOUSEKEEPING;
   }
 

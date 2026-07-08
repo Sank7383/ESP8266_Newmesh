@@ -77,6 +77,7 @@ Not a data form — a `$R|` selector routing to every other form: `Network:1 Dev
 | 1 | Toilet ID | `myConfig.toiletid` | Used to derive `bedToiletShareUnit()` — `true` when `toiletid == 0` **or** `toiletid == machineid` (0 means "no separate toilet unit configured"). Gates both the call-legality rule in §6 AND the toilet-call routing/LED-zone behavior in §8/§9 below — a non-zero `toiletid` that differs from this device's own `machineid` means the physical toilet pull-cord wired into this device reports under that OTHER device's identity, not this one's. |
 | 2 | Door Indicator ID | `myConfig.doorIndicatorId` | Sent as the `"doorid"` field in the plain-WebSocket status message format (`"s<id>,<state>,<doorid>"`). |
 | 3 | Allow Reboot | `myConfig.allowReboot` | Stored but **not currently read anywhere** — **GAP**: no code branch checks this flag before allowing a reboot. |
+| 4 | Status Report Interval Sec | `myConfig.statusReportIntervalSec` | Period of the periodic full-status resend (see §6.1). Rounded to the nearest multiple of 10, minimum 10, on save. Defaults to `30`. |
 
 ### Form 3 — LED Settings
 | argk | Field | Config path | Effect |
@@ -183,11 +184,20 @@ struct CallStatus {
 - `CODE_BLUE` (line 113): only `CANCEL` → `IDLE`.
 - `CUSTOM` (line 120): only `CANCEL` → `IDLE`. Nothing currently transitions *into* CUSTOM (see Form 13 gap).
 
-**`reportedStatusCode(status, ruleset)`** — the single number sent to the server, computed fresh each time, never stored:
-- Housekeeping set + any active call/toilet-call → `8` (HOUSEKEEPING_CALL).
-- Housekeeping set + nothing active → `7` (HOUSEKEEPING).
-- `mainState == CUSTOM` and enabled → `ruleset.customState.reportedCode`.
-- Otherwise → the numeric value of `mainState` if not IDLE, else `5` (TOILET_CALL) if a toilet call is active, else `0` (IDLE).
+**`reportedStatusCode(status, ruleset)`** (`CallStateMachine.cpp`, right at the top of the function) — the single number sent to the server, computed fresh each time, never stored. **This is where to add any new "combination" reported code** (e.g. a different number for some other state + housekeeping) — same shape as the two `if` lines already there:
+- Housekeeping set:
+  - `mainState == EXTRA_HELP` → reports `3` (EXTRA_HELP's own code), NOT the generic combo number.
+  - `mainState == CODE_BLUE` → reports `4` (CODE_BLUE's own code), NOT the generic combo number.
+  - Anything else active (`CALL`/`CARE`/`TOILET_CALL`) → `8` (HOUSEKEEPING_CALL).
+  - Nothing active → `7` (HOUSEKEEPING).
+  - **To add another exception** (e.g. a distinct code for `CARE` + housekeeping): add `if (status.mainState == CallState::CARE) return (uint8_t)CallState::CARE;` alongside the EXTRA_HELP/CODE_BLUE lines, before the generic `anyActiveCall ? HOUSEKEEPING_CALL : HOUSEKEEPING` fallback. The `housekeeping` flag itself (`status.housekeeping`) is never touched by this — it stays `true` regardless of which number gets reported; only `CallStateMachine::apply()`'s `HOUSEKEEPING` action (line 12) sets/clears it.
+- Housekeeping NOT set: `mainState == CUSTOM` and enabled → `ruleset.customState.reportedCode`. Otherwise → the numeric value of `mainState` if not IDLE, else `5` (TOILET_CALL) if a toilet call is active, else `0` (IDLE).
+
+### 6.1 Periodic status report (`.ino`, `sendBedStatus()`/`sendToiletStatus()`/`loop()`)
+Independent of button events, the device re-sends its current status every `myConfig.statusReportIntervalSec` seconds (Form 2 argk 4, dynamic — validated to a multiple of 10, minimum 10, default 30) so the server's view can't drift out of sync from a missed/dropped message. Mechanism: `g_lastStatusReportMs` records the last time EITHER `sendBedStatus()` or `sendToiletStatus()` actually sent something (both functions stamp it on every call, including button-triggered ones) — `loop()` checks `now - g_lastStatusReportMs >= reportIntervalMs` and only fires the periodic resend when nothing has been reported for a full interval, so a real event doesn't get redundantly followed by an immediate periodic repeat.
+- Always resends this device's own combined status (`sendBedStatus()`, under `machineid`).
+- **Only when `!bedToiletShareUnit(myConfig)`** (a distinct `toiletid`), ALSO resends the toilet's last known status (`sendToiletStatus(g_lastToiletStatus)`, under `toiletid`) — `g_lastToiletStatus` is the module-level record of the last status this device told the server about that separate toilet (updated by every `sendToiletStatus()` call, including from the button dispatch in §6 above). When the toilet IS this same unit, its state is already folded into the one bed status via `reportedStatusCode()`, so there's nothing separate to resend.
+- The same `sendBedStatus()`/`sendToiletStatus()` pair is also what `resendCurrentStatus()` calls (invoked by `NewMeshNOW.h`'s `uplinkHealthCheck()` the moment the uplink reconnects after being down) — one pair of functions, three call sites (button dispatch, periodic timer, reconnect).
 
 ## 7. Transport / uplink (device → server)
 
@@ -217,6 +227,14 @@ Zone layout, decided by `myConfig.deviceRole`:
   - `leds_[2..count-1]` — the aggregate/door-indicator zone: highest-priority raw status code (`aggregateMaxStatus_`) across every room `LedAggregator` knows about (this DOES intentionally reflect arbitrary mesh/server "j" traffic for any room, unlike `leds_[1]` above), colored the same way as `leds_[1]`'s remote case.
 
 Color resolution (`repaint()`): `leds_[0]` is considered "active" (`bedZoneActive`) when `mainState != IDLE` OR (`bedToiletShareUnit_` AND `toiletCallActive`) — the mirror case above. If `housekeeping` is set and the zone is active, the LED **blinks** (500ms, `BlinkController`) between the housekeeping color (`HK_PINK`) and the specific active-call color — richer local feedback than the single collapsed "8" code the server sees. Otherwise it's a steady color: `CALL`→red, `CARE`→green, `EXTRA_HELP`→orange, `CODE_BLUE`→blue, `CUSTOM`→whatever `ruleset.customState.ledColorIndex` points to, a mirrored toilet call→red (same as `CALL`), `IDLE`→`idleColorRaw()` (see "Default LED On" below, not a fixed color). `leds_[1]`/aggregate zones are steady colors only — no blink.
+
+**Where the dual-blink decision actually lives — `LedStripController::setCallZone()`, NOT `repaint()`.** `repaint()` only ever asks `blink_.isOn()`; whether `blink_` is even armed is decided in `setCallZone()`:
+```cpp
+bool bedZoneActive = (status.mainState != CallState::IDLE) || (bedToiletShareUnit_ && status.toiletCallActive);
+bool blinkEligible = bedZoneActive && (status.mainState != CallState::CODE_BLUE);
+blink_.setEnabled(status.housekeeping && blinkEligible);
+```
+`CODE_BLUE` is excluded here — that's why it shows *steady* blue under housekeeping instead of blinking pink/blue: `blink_.setEnabled(false)` makes `BlinkController` force `isOn()` to always return `true`, so `repaint()`'s `blink_.isOn() ? ownActiveColor() : HK_PINK` ternary falls through to `ownActiveColor()` (blue) unconditionally — no separate "steady" branch needed in `repaint()` itself. **To make some OTHER state also skip the dual-blink** (steady-only under housekeeping), add it to the `blinkEligible` exclusion the same way: `&& (status.mainState != CallState::CODE_BLUE) && (status.mainState != CallState::YOUR_STATE)`. Every state NOT excluded here (currently `CALL`/`CARE`/`EXTRA_HELP`/mirrored `TOILET_CALL`) dual-blinks by default the moment `housekeeping` is set and the zone is active — no extra code needed for a new state to blink, only to make it NOT blink.
 
 `colorRow` (0=RGB/1=GRB/2=BRG, from Form 3, **defaults to 1/GRB**) selects which row of a 3×9 color table to use, compensating for physical LED-strip wiring order while FastLED itself is always told `RGB`. Getting this wrong doesn't turn LEDs off or freeze them — it swaps *which physical channel* a color's bytes land on, so e.g. row 0 on a GRB-native strip (the common case) shows `CALL_RED` as green and `CARE_GREEN` as red, a clean R/G swap, while everything still updates live. `logPixels()` (below) is the way to tell the two apart: if the debug log shows the expected hex (`#FF0000` for a call) but the strip visibly shows a different color, it's this row setting, not a call-state bug — the row values in the table are a starting point, not hardware-measured, so if none of the 3 rows produce the right color on a given strip, retune the specific slot's hex in `LED_COLOUR` directly and confirm against `logPixels()`.
 

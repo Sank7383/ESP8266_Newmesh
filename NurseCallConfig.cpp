@@ -12,8 +12,8 @@
 // bugs but are actually stale EEPROM. Bumped 1 -> 2 here to force one clean
 // reset onto the current layout; every unit will need its settings redone
 // once after this flashes. Bumped 2 -> 3 for the added toiletIndicationOnIdle
-// field.
-#define CONFIG_STRUCT_VERSION 3u
+// field. Bumped 3 -> 4 for the added statusReportIntervalSec field.
+#define CONFIG_STRUCT_VERSION 4u
 #define CONFIG_EEPROM_OFFSET 100
 
 DeviceConfig myConfig;
@@ -111,6 +111,7 @@ void configApplyDefaults(DeviceConfig &c) {
   c.ledAggregate = { 0, 8, 0, 80 };
 
   c.toiletIndicationOnIdle = true;
+  c.statusReportIntervalSec = 30;
 }
 
 bool configLoad() {
