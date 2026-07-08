@@ -43,11 +43,23 @@ void configApplyDefaults(DeviceConfig &c) {
   c.machineid = 1;
   c.toiletid = 0;
 
-  c.color_row_indi = 0;
-  c.color_row_frnt = 0;
-  c.color_row_toi = 0;
+  // Defaults to GRB (1), not RGB (0): the vast majority of WS2812/WS2812B
+  // strips in the field are natively GRB-ordered — true-RGB-native strips
+  // are the rare exception. Since FastLED is always told "RGB" (no
+  // reordering, see LedStripController.h), leaving this at row 0 sends
+  // colors as if the strip were RGB-native, which on real GRB hardware
+  // shows every color with its R and G channels swapped (e.g. CALL_RED
+  // shows green, CARE_GREEN shows red). Sites with a genuinely RGB-native
+  // strip should switch this to 0 via the settings form (Color Row field).
+  c.color_row_indi = 1;
+  c.color_row_frnt = 1;
+  c.color_row_toi = 1;
   c.socketio = false;
-  c.Indicator_timer = 5;
+  // Whole seconds (NOT the legacy firmware's *10000ms-per-unit scaling) —
+  // how often the idle LED heartbeat-pulses while Default LED On is Off.
+  // Validated/rounded to a multiple of 5 (min 5) in DeviceProtocol.cpp's
+  // Form 3 parser.
+  c.Indicator_timer = 10;
   c.default_led = false;
   c.direct_code_blue = false;
   c.allowReboot = true;

@@ -114,6 +114,7 @@ void loop() {
   }
 
   g_buzzer.tick(now);
+  g_ledController->refreshConfig(myConfig);
   g_ledController->setCallZone(g_callStatus, myConfig.ruleset);
   g_ledController->setAggregateZone(g_roomAggregator.roomStates(), g_roomAggregator.count());
   g_ledController->setLinkStatus(g_statusUplink->isNetworkUp(), g_statusUplink->isLinkUp());

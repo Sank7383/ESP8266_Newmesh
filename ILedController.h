@@ -6,6 +6,14 @@
 class ILedController {
 public:
   virtual void begin(const DeviceConfig &cfg) = 0;
+  // Re-reads the small set of LED-relevant fields (color row, brightness,
+  // active LED count, device role, Default LED On, idle heartbeat interval)
+  // from myConfig. Settings-form saves only write to myConfig/EEPROM — they
+  // don't otherwise reach a controller whose fields were captured once in
+  // begin() — so this must be called every loop for a Form 3 change (Color
+  // Row, Brightness, Active LED Count, Default LED On) to take effect
+  // without requiring a reboot.
+  virtual void refreshConfig(const DeviceConfig &cfg) = 0;
   // Takes the full CallStatus (not just the collapsed reported number) so
   // the display can show richer local feedback than the server sees — e.g.
   // blinking between the housekeeping color and the specific active-call

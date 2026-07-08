@@ -138,6 +138,7 @@ void sendFormData(int formno) {
     appendText(msg, "LED Brightness", String(myConfig.ledBrightness));
     appendDropdown(msg, "Default LED On", "Off:0#On:1", myConfig.default_led ? 1 : 0);
     appendText(msg, "Active LED Count", String(myConfig.ledCall.count));
+    appendText(msg, "Idle Blink Interval Sec (multiple of 5, min 5)", String(myConfig.Indicator_timer));
   }
   else if (formno == 4) {
     msg = "FORM:4$DONE$RS485 Settings";
@@ -301,6 +302,12 @@ void getFormData(const char *formdata1, int socketnumber) {
           myConfig.ledCall.count = count;
           myConfig.ledToilet.count = count;
           myConfig.ledAggregate.count = count;
+        }
+        else if (argk == 4) {
+          long secs = argv.toInt();
+          if (secs < 5) secs = 5;
+          secs = ((secs + 2) / 5) * 5;   // round to nearest multiple of 5
+          myConfig.Indicator_timer = (int)secs;
         }
       }
       else if (formid == 4) {

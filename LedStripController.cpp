@@ -9,29 +9,58 @@
 // hardware-measured calibration — retune via this table if a given strip's
 // colors look swapped on real hardware.
 static const uint32_t LED_COLOUR[3][LED_COLOR_SLOT_COUNT] = {
-  // CLEAR,    CALL_RED, HK_PINK,  EXTRA_ORANGE, CODE_BLUE, CARE_GREEN, DISCONNECT_PINK, DISCONNECT_WHITE
-  {0x000000, 0xFF0000, 0xFF1493, 0xFF7F00,     0x0000FF,  0x00FF00,   0xFF1493,        0xFFFFFF},   // RGB
-  {0x000000, 0x00FF00, 0x14FF93, 0x7FFF00,     0x0000FF,  0xFF0000,   0x14FF93,        0xFFFFFF},   // GRB
-  {0x000000, 0x00FF00, 0x93FF14, 0x00FF7F,     0xFF0000,  0x0000FF,   0x93FF14,        0xFFFFFF},   // BRG
+  // CLEAR,    CALL_RED, HK_PINK,  EXTRA_ORANGE, CODE_BLUE, CARE_GREEN, DISCONNECT_PINK, DISCONNECT_WHITE, IDLE_ON
+  {0x000000, 0xFF0000, 0xFF1493, 0xFF7F00,     0x0000FF,  0x00FF00,   0xFF1493,        0xFFFFFF,         0xFFFF00},   // RGB
+  {0x000000, 0x00FF00, 0x14FF93, 0x7FFF00,     0x0000FF,  0xFF0000,   0x14FF93,        0xFFFFFF,         0xFFFF00},   // GRB
+  {0x000000, 0x00FF00, 0x93FF14, 0x00FF7F,     0xFF0000,  0x0000FF,   0x93FF14,        0xFFFFFF,         0x00FFFF},   // BRG
 };
 
 void LedStripController::begin(const DeviceConfig &cfg) {
-  role_ = (DeviceRole)cfg.deviceRole;
-  colorRow_ = cfg.color_row_indi <= 2 ? cfg.color_row_indi : 0;
-  activeCount_ = cfg.ledCall.count;
-  if (activeCount_ == 0 || activeCount_ > MAX_LEDS) activeCount_ = 8;
-
   FastLED.addLeds<WS2812, LED_DATA_PIN, RGB>(leds_, MAX_LEDS);
-  FastLED.setBrightness(cfg.ledBrightness ? cfg.ledBrightness : 80);
-
   blink_.begin(500);
   linkBlink_.begin(500);
+  refreshConfig(cfg);
   dirty_ = true;
   repaint();
 }
 
+void LedStripController::refreshConfig(const DeviceConfig &cfg) {
+  // Called every loop (see the .ino) so Form 3 saves take effect without a
+  // reboot — MUST only mark dirty on an actual change, or repaint()/
+  // FastLED.show()/logPixels() would fire every single loop iteration
+  // forever, flooding the debug log and burning cycles on a no-op repaint.
+  DeviceRole newRole = (DeviceRole)cfg.deviceRole;
+  uint8_t newColorRow = cfg.color_row_indi <= 2 ? cfg.color_row_indi : 0;
+  uint8_t newCount = cfg.ledCall.count;
+  if (newCount == 0 || newCount > MAX_LEDS) newCount = 8;
+  bool newDefaultLedOn = cfg.default_led;
+  uint32_t newIdleIntervalMs = (uint32_t)((cfg.Indicator_timer >= 5) ? cfg.Indicator_timer : 10) * 1000UL;
+  uint8_t newBrightness = cfg.ledBrightness ? cfg.ledBrightness : 80;
+
+  bool changed = (newRole != role_) || (newColorRow != colorRow_) || (newCount != activeCount_) ||
+                 (newDefaultLedOn != defaultLedOn_) || (newIdleIntervalMs != idleHeartbeatIntervalMs_) ||
+                 (newBrightness != FastLED.getBrightness());
+  if (!changed) return;
+
+  role_ = newRole;
+  colorRow_ = newColorRow;
+  activeCount_ = newCount;
+  defaultLedOn_ = newDefaultLedOn;
+  idleHeartbeatIntervalMs_ = newIdleIntervalMs;
+  FastLED.setBrightness(newBrightness);
+  dirty_ = true;
+}
+
 uint32_t LedStripController::colorFor(LedColorSlot slot) const {
   return LED_COLOUR[colorRow_][(uint8_t)slot];
+}
+
+uint32_t LedStripController::idleColorRaw() const {
+  // "Default LED On" (Form 3): ON = steady idle color when nothing's
+  // active; OFF = normally dark, with a brief IDLE_ON pulse every
+  // idleHeartbeatIntervalMs_ (see tick()) as a heartbeat.
+  if (defaultLedOn_) return colorFor(LedColorSlot::IDLE_ON);
+  return colorFor(idlePulseOn_ ? LedColorSlot::IDLE_ON : LedColorSlot::CLEAR);
 }
 
 LedColorSlot LedStripController::colorSlotForCallState(CallState state) {
@@ -124,13 +153,14 @@ void LedStripController::repaint() {
   } else if (lastStatus_.mainState != CallState::IDLE || lastStatus_.toiletCallActive) {
     callColorRaw = activeCallColor();
   } else {
-    callColorRaw = colorFor(LedColorSlot::CLEAR);
+    callColorRaw = idleColorRaw();
   }
 
   CRGB callColor = (CRGB)callColorRaw;
 
   if (role_ == DeviceRole::DOOR_INDICATOR) {
-    CRGB c = (CRGB)LED_COLOUR[colorRow_][aggregatePriorityColorIdx_];
+    bool aggregateIdle = (aggregatePriorityColorIdx_ == (uint8_t)LedColorSlot::CLEAR);
+    CRGB c = aggregateIdle ? (CRGB)idleColorRaw() : (CRGB)LED_COLOUR[colorRow_][aggregatePriorityColorIdx_];
     for (uint8_t i = 0; i < activeCount_; i++) leds_[i] = c;
   } else {
     if (activeCount_ > 0) leds_[0] = callColor;
@@ -157,6 +187,20 @@ void LedStripController::logPixels(const char *reason) const {
 void LedStripController::tick(uint32_t nowMs) {
   if (blink_.tick(nowMs)) dirty_ = true;
   if (linkBlink_.tick(nowMs)) dirty_ = true;
+
+  // Idle heartbeat pulse: only matters visually while idleColorRaw() is
+  // actually in use (nothing active) — runs unconditionally here so it's
+  // always in the right phase whenever that becomes true, rather than
+  // needing to know "is the device idle right now" itself.
+  if (!defaultLedOn_) {
+    uint32_t phaseMs = idlePulseOn_ ? IDLE_PULSE_ON_MS : idleHeartbeatIntervalMs_;
+    if ((nowMs - idleTimerMs_) >= phaseMs) {
+      idleTimerMs_ = nowMs;
+      idlePulseOn_ = !idlePulseOn_;
+      dirty_ = true;
+    }
+  }
+
   if (!dirty_) return;
   dirty_ = false;
   repaint();

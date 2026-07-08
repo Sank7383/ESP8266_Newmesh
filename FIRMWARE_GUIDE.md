@@ -81,10 +81,13 @@ Not a data form — a `$R|` selector routing to every other form: `Network:1 Dev
 ### Form 3 — LED Settings
 | argk | Field | Config path | Effect |
 |---|---|---|---|
-| 0 | Color Row | `myConfig.color_row_indi` (also mirrored into `color_row_frnt`/`color_row_toi`, which are otherwise unused legacy fields) | `0`=RGB, `1`=GRB, `2`=BRG — selects which row of the `LED_COLOUR` table compensates for physical LED-strip wire order (see §8). |
+| 0 | Color Row | `myConfig.color_row_indi` (also mirrored into `color_row_frnt`/`color_row_toi`, which are otherwise unused legacy fields) | `0`=RGB, `1`=GRB, `2`=BRG — selects which row of the `LED_COLOUR` table compensates for physical LED-strip wire order (see §8). **Defaults to `1` (GRB)**, since that's the native wire order of the overwhelming majority of real WS2812/WS2812B strips — switch to `0` only if bench-testing shows a genuinely RGB-native strip. |
 | 1 | LED Brightness | `myConfig.ledBrightness` | Passed to `FastLED.setBrightness()`. |
-| 2 | Default LED On | `myConfig.default_led` | Stored but **not currently read anywhere** — **GAP**. |
+| 2 | Default LED On | `myConfig.default_led` | `On`: idle (nothing active) shows a steady `IDLE_ON` color. `Off` (default): idle is normally dark, pulsing `IDLE_ON` briefly every argk-4's interval as a heartbeat. See §8. |
 | 3 | Active LED Count | `myConfig.ledCall.count` (mirrored into `ledToilet.count`/`ledAggregate.count`) | How many LEDs of the strip are actually painted (see §8 for zone layout). |
+| 4 | Idle Blink Interval Sec | `myConfig.Indicator_timer` | Seconds between idle heartbeat pulses when Default LED On is Off. Rounded to the nearest multiple of 5, minimum 5, on save. Defaults to `10`. (Reinterpreted from the legacy field's confusing `*10000ms`-per-unit scaling — this rewrite stores it as plain whole seconds.) |
+
+**All four fields in this form take effect live, without a reboot** — `LedStripController::refreshConfig()` re-reads them from `myConfig` every loop iteration (see §8). This is true only for Form 3; most other settings (route, button variant, PCB revision, etc.) are still captured once at boot and need a reboot (Form 0 → Reboot) to take effect.
 
 ### Form 4 — RS485 Settings
 | argk | Field | Config path | Effect |
@@ -205,9 +208,15 @@ Zone layout, decided by `myConfig.deviceRole`:
 - **DoorIndicator (role 2)**: the *entire* strip shows one color — the aggregate/room-priority color from `LedAggregator`. This device's own `CallStatus` is never shown on its LEDs.
 - **Bed/Toilet/Combo (roles 0/1/3)**: `leds_[0]` = this device's own call color; `leds_[1..count-1]` = the aggregate color.
 
-Color resolution (`repaint()`): if `housekeeping` is set and something is active, the LED **blinks** (500ms, `BlinkController`) between the housekeeping color (`HK_PINK`) and the specific active-call color — richer local feedback than the single collapsed "8" code the server sees. Otherwise it's a steady color: `CALL`→red, `CARE`→green, `EXTRA_HELP`→orange, `CODE_BLUE`→blue, `TOILET_CALL`→red (same as Call), `CUSTOM`→whatever `ruleset.customState.ledColorIndex` points to, `IDLE`→off.
+Color resolution (`repaint()`): if `housekeeping` is set and something is active, the LED **blinks** (500ms, `BlinkController`) between the housekeeping color (`HK_PINK`) and the specific active-call color — richer local feedback than the single collapsed "8" code the server sees. Otherwise it's a steady color: `CALL`→red, `CARE`→green, `EXTRA_HELP`→orange, `CODE_BLUE`→blue, `TOILET_CALL`→red (same as Call), `CUSTOM`→whatever `ruleset.customState.ledColorIndex` points to, `IDLE`→`idleColorRaw()` (see "Default LED On" below, not a fixed color).
 
-`colorRow` (0=RGB/1=GRB/2=BRG, from Form 3) selects which row of a 3×8 color table to use, compensating for physical LED-strip wiring order while FastLED itself is always told `RGB`.
+`colorRow` (0=RGB/1=GRB/2=BRG, from Form 3, **defaults to 1/GRB**) selects which row of a 3×9 color table to use, compensating for physical LED-strip wiring order while FastLED itself is always told `RGB`. Getting this wrong doesn't turn LEDs off or freeze them — it swaps *which physical channel* a color's bytes land on, so e.g. row 0 on a GRB-native strip (the common case) shows `CALL_RED` as green and `CARE_GREEN` as red, a clean R/G swap, while everything still updates live. `logPixels()` (below) is the way to tell the two apart: if the debug log shows the expected hex (`#FF0000` for a call) but the strip visibly shows a different color, it's this row setting, not a call-state bug — the row values in the table are a starting point, not hardware-measured, so if none of the 3 rows produce the right color on a given strip, retune the specific slot's hex in `LED_COLOUR` directly and confirm against `logPixels()`.
+
+**Default LED On / idle heartbeat (`idleColorRaw()`, `IDLE_ON` slot)**: whenever nothing is active (own call zone idle, or a door indicator's aggregate zone idle), the color shown is NOT a fixed "off" — it's `idleColorRaw()`:
+- `myConfig.default_led == true`: steady `IDLE_ON` (yellow) — device always shows it's alive.
+- `myConfig.default_led == false` (default): normally `CLEAR` (off), except for a brief `IDLE_ON` pulse (`IDLE_PULSE_ON_MS` = 300ms) every `myConfig.Indicator_timer` seconds (default 10, Form 3 argk 4) — a heartbeat so the device doesn't look dead while genuinely idle. The pulse timer (`idleTimerMs_`/`idlePulseOn_` in `tick()`) runs continuously regardless of call state; it only becomes visible when `idleColorRaw()` is actually what's being painted, so it never interferes with an active call's color.
+
+**Live settings refresh (`refreshConfig()`)**: `LedStripController`'s Form-3-relevant fields (`colorRow_`, `activeCount_`, `role_`, `defaultLedOn_`, `idleHeartbeatIntervalMs_`, brightness) are re-read from `myConfig` every loop iteration via `g_ledController->refreshConfig(myConfig)` (called from the `.ino`, right before `setCallZone()`) — NOT just once at boot. This is what makes Color Row / Brightness / Active LED Count / Default LED On / Idle Blink Interval take effect immediately after saving Form 3, without a reboot. Most other config (route, button variant, PCB revision, ruleset) is still boot-time-only and needs Form 0 → Reboot to pick up a change.
 
 **Disconnect blink (`setLinkStatus()`, matches the reference firmware's `setLedStatus()` priority order exactly)**: every loop iteration, the `.ino` calls `g_ledController->setLinkStatus(g_statusUplink->isNetworkUp(), g_statusUplink->isLinkUp())`. In `repaint()`, this is checked **before** anything else and, if either is false, completely overrides the call-state color for the whole zone (the door indicator's full strip, or just `leds_[0]` for bed/toilet/combo — same zone that would otherwise show the call color):
 - `networkUp == false` (no WiFi STA association / no Ethernet link at all) → blinks `DISCONNECT_WHITE` ↔ `CLEAR` (black). Most severe, wins if both are false.
@@ -225,7 +234,6 @@ This uses its own independent `BlinkController` (`linkBlink_`, 500ms period) so 
 - Form 13 field "Ruleset Preset" is stored but never read — no behavioral effect.
 - Form 13's `CustomState`/`CallState::CUSTOM` has no trigger wired to it anywhere — enabling it has no visible effect until something sets `mainState = CallState::CUSTOM`.
 - Form 2 "Allow Reboot" is stored but never checked before a reboot occurs.
-- Form 3 "Default LED On" is stored but never read.
 - Form 4 "New 485 Module" and "Legacy Protocol Select" are stored but unused by the current hardware-UART-based `TransportRs485` (they mattered for the legacy SoftwareSerial implementation this replaced).
 - Form 12 slots 2–6 (Toilet/Extra/Blue/Attend/AP) have no effect on Gpio2/Gpio3Remote button variants — only slots 0/1 are read by those drivers, with no UI indication that the other 5 dropdowns are inert for the selected variant.
 - OTA firmware update is a stub (`handleBinUpdate` just logs and returns) — explicitly out of scope, flagged as a valuable fast-follow since one image now covers every variant.

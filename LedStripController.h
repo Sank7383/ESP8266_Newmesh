@@ -18,7 +18,7 @@
 // Named color slots, matching the reference button.h's LedStates exactly —
 // this is the ONE place a status maps to a color, by name, not by bit math.
 enum class LedColorSlot : uint8_t {
-  CLEAR = 0,           // idle
+  CLEAR = 0,           // fully off
   CALL_RED = 1,        // call, or toilet-call (same color, different zone)
   HK_PINK = 2,          // housekeeping only
   EXTRA_ORANGE = 3,     // extra-help
@@ -26,12 +26,14 @@ enum class LedColorSlot : uint8_t {
   CARE_GREEN = 5,       // care/attend acknowledged
   DISCONNECT_PINK = 6,  // reserved: local-link-down blink color
   DISCONNECT_WHITE = 7, // reserved: upstream-link-down blink color
+  IDLE_ON = 8,          // steady/heartbeat "device is alive, nothing active" color — see Default LED On
 };
-#define LED_COLOR_SLOT_COUNT 8
+#define LED_COLOR_SLOT_COUNT 9
 
 class LedStripController : public ILedController {
 public:
   void begin(const DeviceConfig &cfg) override;
+  void refreshConfig(const DeviceConfig &cfg) override;
   void setCallZone(const CallStateMachine::CallStatus &status, const CallRulesetConfig &ruleset) override;
   void setAggregateZone(const uint8_t *roomStates, uint8_t count) override;
   void setLinkStatus(bool networkUp, bool serverUp) override;
@@ -50,11 +52,22 @@ private:
   bool networkUp_ = true;
   bool serverUp_ = true;
 
+  // "Default LED On" (myConfig.default_led): when true, idle (nothing
+  // active) shows a steady IDLE_ON color. When false, idle is normally off
+  // and IDLE_ON only flashes briefly every idleHeartbeatIntervalMs_ as a
+  // heartbeat — matches the behavior described for the Form 3 field.
+  bool defaultLedOn_ = false;
+  uint32_t idleHeartbeatIntervalMs_ = 10000;
+  uint32_t idleTimerMs_ = 0;
+  bool idlePulseOn_ = false;
+  static const uint32_t IDLE_PULSE_ON_MS = 300;
+
   BlinkController blink_;       // housekeeping+active-call color blink
   BlinkController linkBlink_;   // disconnect (white/pink) blink — independent of the above
   bool dirty_ = true;
 
   uint32_t colorFor(LedColorSlot slot) const;
+  uint32_t idleColorRaw() const;
   static LedColorSlot colorSlotForCallState(CallState state);
   void repaint();
   // Dumps every active pixel's actual RGB hex value over debugdata() (visible
