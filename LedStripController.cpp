@@ -108,11 +108,15 @@ void LedStripController::setCallZone(const CallStateMachine::CallStatus &status,
   // Housekeeping + an active BED call blinks leds_[0] between the
   // housekeeping color and the specific active-call color — richer local
   // feedback than the single collapsed "status 8" the server sees
-  // (CallStateMachine::reportedStatusCode). Deliberately keyed on mainState
-  // only, not toiletCallActive — leds_[0] is the bed's own zone now, the
-  // toilet has its own zone (leds_[1]) that doesn't blink.
-  bool bedActive = (status.mainState != CallState::IDLE);
-  blink_.setEnabled(status.housekeeping && bedActive);
+  // (CallStateMachine::reportedStatusCode). Toilet only counts here when
+  // bedToiletShareUnit_ — same physical unit, same machineid == toiletid
+  // (or toiletid==0), so there's no separate device to show it on and it
+  // mirrors onto leds_[0] too (still reported as TOILET_CALL(5) to the
+  // server, never folded into the bed's own reported code — this only
+  // affects the LOCAL LED, see repaint()). A distinct toiletid never
+  // reaches this — that case is leds_[1]-only, fed by setToiletRemoteStatus().
+  bool bedZoneActive = (status.mainState != CallState::IDLE) || (bedToiletShareUnit_ && status.toiletCallActive);
+  blink_.setEnabled(status.housekeeping && bedZoneActive);
 
   dirty_ = true;
 }
@@ -158,20 +162,29 @@ void LedStripController::repaint() {
     return;
   }
 
-  // leds_[0] — this device's OWN call status ONLY. Toilet is a separate
-  // zone (leds_[1], below) now, so toiletCallActive deliberately plays no
-  // part here anymore — a toilet-only call no longer lights leds_[0].
+  // leds_[0] — this device's OWN call status, PLUS a mirrored toilet-call
+  // color when bedToiletShareUnit_ (same physical unit, no separate toilet
+  // device to show it on instead — see setCallZone()). A distinct toiletid
+  // never affects leds_[0]; that case is leds_[1]-only.
+  bool bedOwnActive = (lastStatus_.mainState != CallState::IDLE);
+  bool mirrorToiletOnBed = bedToiletShareUnit_ && lastStatus_.toiletCallActive;
   auto ownActiveColor = [&]() -> uint32_t {
-    if (lastStatus_.mainState == CallState::CUSTOM) return LED_COLOUR[colorRow_][customColorIdx_];
-    return colorFor(colorSlotForCallState(lastStatus_.mainState));
+    if (bedOwnActive) {
+      if (lastStatus_.mainState == CallState::CUSTOM) return LED_COLOUR[colorRow_][customColorIdx_];
+      return colorFor(colorSlotForCallState(lastStatus_.mainState));
+    }
+    // Only reached when mirrorToiletOnBed is what's making the zone active —
+    // same red a bed Call would show, but the server still gets TOILET_CALL(5)
+    // via reportedStatusCode(), not CALL(1) — this only changes the LED.
+    return colorFor(colorSlotForCallState(CallState::TOILET_CALL));
   };
 
-  bool bedActive = (lastStatus_.mainState != CallState::IDLE);
+  bool bedZoneActive = bedOwnActive || mirrorToiletOnBed;
   uint32_t callColorRaw;
   if (lastStatus_.housekeeping) {
-    callColorRaw = bedActive ? (blink_.isOn() ? ownActiveColor() : colorFor(LedColorSlot::HK_PINK))
-                              : colorFor(LedColorSlot::HK_PINK);   // steady housekeeping-only
-  } else if (bedActive) {
+    callColorRaw = bedZoneActive ? (blink_.isOn() ? ownActiveColor() : colorFor(LedColorSlot::HK_PINK))
+                                  : colorFor(LedColorSlot::HK_PINK);   // steady housekeeping-only
+  } else if (bedZoneActive) {
     callColorRaw = ownActiveColor();
   } else {
     callColorRaw = idleColorRaw();
