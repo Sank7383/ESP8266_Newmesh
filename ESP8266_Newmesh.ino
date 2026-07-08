@@ -130,6 +130,8 @@ void loop() {
         // no way to tell a press registered until the finger comes off the
         // button. PALM_ATTACHED is an accessory-presence signal, not a
         // press, so it stays silent (its type defaults to RELEASED anyway).
+        // Buzzer keeps beeping while held — see BuzzerController for the
+        // long-press-cap / min-duration-floor stop conditions.
         debugdata(String("BUTTON PRESSED: " + String(buttonActionName(ev.action))).c_str());
         if (ev.action != ButtonAction::PALM_ATTACHED) g_buzzer.trigger(now);
         // Long-press vs short-press isn't known yet — the actual call-state
@@ -138,6 +140,12 @@ void loop() {
       else {
         debugdata(String("BUTTON RELEASED: " + String(buttonActionName(ev.action)) +
                           (ev.isLongPress ? " (long press)" : " (short press)")).c_str());
+
+        // Ask the buzzer to stop — it may already have stopped on its own
+        // if this held long enough to hit the long-press cap; if this was a
+        // short press, it keeps beeping until the min-duration floor is hit
+        // (see BuzzerController::tick()) so a very quick tap is still audible.
+        if (ev.action != ButtonAction::PALM_ATTACHED) g_buzzer.release();
 
         if (ev.action == ButtonAction::TOILET_CALL && !bedToiletShareUnit(myConfig)) {
           // This deliberately bypasses CallStateMachine::apply() entirely:
