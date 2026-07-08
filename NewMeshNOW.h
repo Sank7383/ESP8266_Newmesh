@@ -1319,11 +1319,20 @@ input,select,textarea{width:100%;padding:8px;box-sizing:border-box;font-size:16p
 button{padding:10px 16px;font-size:15px;margin:4px 6px 4px 0;cursor:pointer}
 #menu button{display:block;width:100%;text-align:left;margin-bottom:6px}
 #status{color:#666;font-size:13px;margin-bottom:14px}
+#logpanel{margin-top:18px}
+#logpanel h3{margin-bottom:6px}
+#log{background:#111;color:#0f0;font-family:monospace;font-size:12px;height:220px;overflow-y:auto;
+     padding:8px;box-sizing:border-box;white-space:pre-wrap;border-radius:4px}
+#logpanel button{font-size:13px;padding:4px 10px}
 </style></head>
 <body>
 <h2>Nurse Call Settings</h2>
 <div id="status">Connecting...</div>
 <div id="app"></div>
+<div id="logpanel">
+  <h3>Live Debug Log <button onclick="clearLog()">Clear</button></h3>
+  <div id="log"></div>
+</div>
 <script>
 var ws, formId = -1;
 function setStatus(s) { document.getElementById("status").textContent = s; }
@@ -1335,8 +1344,19 @@ function connect() {
   ws.onerror = function () { setStatus("Connection error"); };
   ws.onmessage = function (e) { handleMessage(e.data); };
 }
+var logLines = [];
+function clearLog() { logLines = []; document.getElementById("log").textContent = ""; }
+function appendLog(text) {
+  var t = new Date().toLocaleTimeString();
+  logLines.push("[" + t + "] " + text);
+  if (logLines.length > 300) logLines.shift();
+  var el = document.getElementById("log");
+  el.textContent = logLines.join("\n");
+  el.scrollTop = el.scrollHeight;
+}
 function handleMessage(raw) {
   var msg = raw;
+  if (msg.indexOf("DBG:") === 0) { appendLog(msg.substring(4)); return; }
   var eq = msg.indexOf("=");
   if (eq > 0 && eq < 20 && msg.indexOf("FORM:") !== 0 && msg.indexOf("Connected") !== 0) {
     msg = msg.substring(eq + 1);

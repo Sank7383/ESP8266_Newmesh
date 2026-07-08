@@ -17,6 +17,7 @@ public:
   void loop() override;
   void sendStatus(const StatusPayload &p) override;
   bool isLinkUp() const override;
+  bool isNetworkUp() const override;
 
 private:
   bool linked_ = false;

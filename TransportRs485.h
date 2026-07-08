@@ -21,6 +21,7 @@ public:
   void loop() override;
   void sendStatus(const StatusPayload &p) override;
   bool isLinkUp() const override;
+  bool isNetworkUp() const override;
 
 private:
   static const uint8_t DIRECTION_PIN = 2;

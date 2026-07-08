@@ -69,3 +69,9 @@ void TransportRs485::sendStatus(const StatusPayload &p) {
 bool TransportRs485::isLinkUp() const {
   return (millis() - lastPollMs_) < 60000UL;
 }
+
+bool TransportRs485::isNetworkUp() const {
+  // No separate network tier below the bus protocol itself — being polled
+  // recently IS the network being up for this route.
+  return isLinkUp();
+}

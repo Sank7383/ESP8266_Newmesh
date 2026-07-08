@@ -226,6 +226,9 @@ void sendFormData(int formno) {
          " Housekeeping:" + String(g_callStatus.housekeeping ? 1 : 0) +
          " Role:" + String(myConfig.deviceRole) +
          " (LED call-color only shows for Role 0/1/3 - Role 2=DoorIndicator only shows aggregate color)" + SEP;
+    d += "LED link status: networkUp:" + String(g_statusUplink->isNetworkUp() ? 1 : 0) +
+         " serverUp:" + String(g_statusUplink->isLinkUp() ? 1 : 0) +
+         " (networkUp=0 blinks white, serverUp=0 blinks pink - either overrides the call color)" + SEP;
     d += "Heap:" + String(ESP.getFreeHeap()) + " Up:" + String(millis() / 1000) + "s";
 
     msg = "FORM:14$DONE$Debug$T|Debug||" + urlencode(d) + "|0";

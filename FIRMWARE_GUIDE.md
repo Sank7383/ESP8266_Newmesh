@@ -135,7 +135,10 @@ Read-only. One `$T|Status||...|0` field built by `getCurrentStatus1()`: device n
 **GAP**: nothing currently sets `status.mainState = CallState::CUSTOM` — there is no button action or trigger wired to reach it. Fields 4–6 configure what *would* happen if something did.
 
 ### Form 14 — Debug
-Read-only, one compact multi-line `$T|Debug||...|0` field (rendered as a `<textarea>` in `/forms`). Submitting it just re-sends a fresh snapshot rather than persisting anything. Content: WiFi SSID/RSSI/STA-IP/gateway, AP SSID/IP/client-count/bridged-or-standalone, uplink target/connected/last-success-time/fail-count, route/amServer/ethernet/espnow flags, current call state/toilet/housekeeping/role, heap/uptime.
+Read-only, one compact multi-line `$T|Debug||...|0` field (rendered as a `<textarea>` in `/forms`). Submitting it just re-sends a fresh snapshot rather than persisting anything — it's a point-in-time pull, not a live stream. Content: WiFi SSID/RSSI/STA-IP/gateway, AP SSID/IP/client-count/bridged-or-standalone, uplink target/connected/last-success-time/fail-count, route/amServer/ethernet/espnow flags, current call state/toilet/housekeeping/role, LED link status (networkUp/serverUp), heap/uptime.
+
+### Live debug log (separate from Form 14)
+`debugdata(msg)` (declared in `MeshNowExports.h`, defined in `NewMeshNOW.h`) broadcasts a `"DBG:" + msg` text frame to every connected WebSocket client in real time — this is how `ESP8266_Newmesh.ino` traces button press/release/state-machine results, and how `LedStripController::logPixels()` (see §8) dumps every pixel's actual RGB hex value on each repaint. **The `/forms` page renders this live** in a "Live Debug Log" panel below the settings form (added specifically so `logPixels()` output is visible without a separate raw-WebSocket tool) — `handleMessage()` intercepts anything prefixed `DBG:` and appends it to the `#log` div instead of trying to parse it as a form. The panel persists across form navigation (it lives outside the `#app` div that `renderForm()` replaces) and caps at 300 lines.
 
 ## 5. Button input & the "slot" mapping mechanism
 
@@ -182,7 +185,9 @@ struct CallStatus {
 
 ## 7. Transport / uplink (device → server)
 
-All three implement `ITransport` (`begin`, `loop`, `sendStatus`, `isLinkUp`), selected by `TransportFactory::create()` based on `myConfig.routeType`. **Only the status-uplink leg is route-specific** — the local AP/webserver (`LocalAccessStack`) always runs regardless.
+All three implement `ITransport` (`begin`, `loop`, `sendStatus`, `isLinkUp`, `isNetworkUp`), selected by `TransportFactory::create()` based on `myConfig.routeType`. **Only the status-uplink leg is route-specific** — the local AP/webserver (`LocalAccessStack`) always runs regardless.
+
+`isLinkUp()` reflects the specific configured uplink protocol being connected right now (WebSocket/Socket.IO connected, RS485 polled within the last 60s, Ethernet PHY linked). `isNetworkUp()` is the coarser tier below that — WiFi STA associated / Ethernet linked — true for `TransportMeshWifi` even if the server itself is unreachable. RS485/Ethernet have no separate tier below their own protocol, so their `isNetworkUp()` just mirrors `isLinkUp()`. Both feed `ILedController::setLinkStatus()` every loop (see §8) — this is what drives the disconnect blink.
 
 **`TransportMeshWifi`** (route 0, default): brings up ESP-NOW (`espnow_setup()`) if `mesh_en`. `sendStatus()` always sends a local `"j<id>,<code>"` mesh broadcast (feeds other devices' `LedAggregator`, unrelated to the external server), then separately reports to the actual server:
 - **WebSocket mode** (`socketio=false`): `"s<id>,<code>,<doorIndicatorId>"` via `webSocketClient.sendTXT()`, only if connected.
@@ -204,6 +209,15 @@ Color resolution (`repaint()`): if `housekeeping` is set and something is active
 
 `colorRow` (0=RGB/1=GRB/2=BRG, from Form 3) selects which row of a 3×8 color table to use, compensating for physical LED-strip wiring order while FastLED itself is always told `RGB`.
 
+**Disconnect blink (`setLinkStatus()`, matches the reference firmware's `setLedStatus()` priority order exactly)**: every loop iteration, the `.ino` calls `g_ledController->setLinkStatus(g_statusUplink->isNetworkUp(), g_statusUplink->isLinkUp())`. In `repaint()`, this is checked **before** anything else and, if either is false, completely overrides the call-state color for the whole zone (the door indicator's full strip, or just `leds_[0]` for bed/toilet/combo — same zone that would otherwise show the call color):
+- `networkUp == false` (no WiFi STA association / no Ethernet link at all) → blinks `DISCONNECT_WHITE` ↔ `CLEAR` (black). Most severe, wins if both are false.
+- `networkUp == true` but `serverUp == false` (WiFi's fine, but the configured WebSocket/Socket.IO/RS485-poll/Ethernet-handshake isn't confirmed) → blinks `DISCONNECT_PINK` ↔ `CLEAR`.
+- Both true → normal call-state color as described above.
+
+This uses its own independent `BlinkController` (`linkBlink_`, 500ms period) so it doesn't interact with the housekeeping blink's state.
+
+**Pixel-level debug (`logPixels()`)**: every `repaint()` call ends with a `debugdata()` trace listing the actual `#RRGGBB` value written to every active pixel (plus `colorRow_`, `activeCount_`, and current `FastLED.getBrightness()`), tagged e.g. `LED PIXELS [call] row=0 count=8 bright=80 : [0]#FF0000 [1]#000000 ...`. This is the ground truth of what the firmware computed and sent to the strip — visible live in the `/forms` page's debug log (see §4). If the trace shows the expected color (e.g. `#FF0000` for a CALL) but the physical strip doesn't light up that way, the bug is downstream of software (wiring, `colorRow`/GRB-BRG mismatch, power, or a bad pixel) rather than in the call-state → color logic.
+
 **GAP**: the LED data pin is hardcoded to GPIO0 (`#define LED_DATA_PIN 0` in `LedStripController.h`) for every role — FastLED's `addLeds<CHIPSET, PIN, ...>()` binds the pin at compile time, which can't be made runtime-configurable without a different FastLED API. One deprecated door-indicator PCB revision used GPIO13 and is not supported by this unified image.
 
 ## 9. Consolidated list of known gaps (searchable)
@@ -216,3 +230,5 @@ Color resolution (`repaint()`): if `housekeeping` is set and something is active
 - Form 12 slots 2–6 (Toilet/Extra/Blue/Attend/AP) have no effect on Gpio2/Gpio3Remote button variants — only slots 0/1 are read by those drivers, with no UI indication that the other 5 dropdowns are inert for the selected variant.
 - OTA firmware update is a stub (`handleBinUpdate` just logs and returns) — explicitly out of scope, flagged as a valuable fast-follow since one image now covers every variant.
 - LED data pin is fixed to GPIO0 for all roles/PCB revisions.
+
+**Operational note — EEPROM `CONFIG_STRUCT_VERSION`**: `NurseCallConfig.cpp` bumps this any time `DeviceConfig`'s layout changes, even append-only, because `configLoad()`'s version mismatch is the *only* thing that resets a unit to sane defaults. A field appended after a device's last flash-at-that-version keeps whatever garbage was already at that EEPROM offset — this can look exactly like a logic bug (wrong LED strip length, inert ruleset thresholds) when it's actually stale EEPROM. If a setting behaves inconsistently after adding a new `DeviceConfig` field, bump this constant before debugging further — every already-flashed unit will fall back to defaults once and need its settings redone.

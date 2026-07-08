@@ -1,4 +1,5 @@
 #include "LedStripController.h"
+#include "MeshNowExports.h"
 
 // RGB/GRB/BRG wiring-compensation rows x named color slots (LedColorSlot).
 // Row 0 holds the canonical (true RGB) color for each slot; rows 1-2 are
@@ -24,6 +25,7 @@ void LedStripController::begin(const DeviceConfig &cfg) {
   FastLED.setBrightness(cfg.ledBrightness ? cfg.ledBrightness : 80);
 
   blink_.begin(500);
+  linkBlink_.begin(500);
   dirty_ = true;
   repaint();
 }
@@ -77,7 +79,31 @@ void LedStripController::setAggregateZone(const uint8_t *roomStates, uint8_t cou
   dirty_ = true;
 }
 
+void LedStripController::setLinkStatus(bool networkUp, bool serverUp) {
+  if (networkUp == networkUp_ && serverUp == serverUp_) return;
+  networkUp_ = networkUp;
+  serverUp_ = serverUp;
+  linkBlink_.setEnabled(!networkUp_ || !serverUp_);
+  dirty_ = true;
+}
+
 void LedStripController::repaint() {
+  // Disconnected states take total priority over call-state display —
+  // matches the reference firmware's setLedStatus(), which returns
+  // immediately once it decides the device has no network/server, before
+  // ever looking at call state. !networkUp_ (no WiFi/Ethernet at all) is
+  // more severe than !serverUp_ (WiFi's fine, but the uplink server isn't
+  // answering) so it wins when both are true.
+  if (!networkUp_ || !serverUp_) {
+    LedColorSlot onSlot = !networkUp_ ? LedColorSlot::DISCONNECT_WHITE : LedColorSlot::DISCONNECT_PINK;
+    CRGB c = (CRGB)(linkBlink_.isOn() ? colorFor(onSlot) : colorFor(LedColorSlot::CLEAR));
+    for (uint8_t i = 0; i < activeCount_; i++) leds_[i] = c;
+    FastLED.show();
+    FastLED.show();
+    logPixels(!networkUp_ ? "no-network" : "no-server");
+    return;
+  }
+
   // The color for whatever's currently active, as a raw table lookup —
   // CallState::CUSTOM is the one case that doesn't map to a fixed
   // LedColorSlot, it uses the site-configured customColorIdx_ instead.
@@ -113,10 +139,24 @@ void LedStripController::repaint() {
   }
 
   FastLED.show();
+  FastLED.show();
+  logPixels("call");
+}
+
+void LedStripController::logPixels(const char *reason) const {
+  String msg = "LED PIXELS [" + String(reason) + "] row=" + String(colorRow_) +
+               " count=" + String(activeCount_) + " bright=" + String(FastLED.getBrightness()) + " :";
+  for (uint8_t i = 0; i < activeCount_; i++) {
+    char hex[16];
+    sprintf(hex, " [%u]#%02X%02X%02X", i, leds_[i].r, leds_[i].g, leds_[i].b);
+    msg += hex;
+  }
+  debugdata(msg.c_str());
 }
 
 void LedStripController::tick(uint32_t nowMs) {
   if (blink_.tick(nowMs)) dirty_ = true;
+  if (linkBlink_.tick(nowMs)) dirty_ = true;
   if (!dirty_) return;
   dirty_ = false;
   repaint();

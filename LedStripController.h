@@ -34,6 +34,7 @@ public:
   void begin(const DeviceConfig &cfg) override;
   void setCallZone(const CallStateMachine::CallStatus &status, const CallRulesetConfig &ruleset) override;
   void setAggregateZone(const uint8_t *roomStates, uint8_t count) override;
+  void setLinkStatus(bool networkUp, bool serverUp) override;
   void tick(uint32_t nowMs) override;
 
 private:
@@ -46,10 +47,19 @@ private:
   uint8_t customColorIdx_ = (uint8_t)LedColorSlot::CLEAR;   // raw color-table index for CallState::CUSTOM
   uint8_t aggregatePriorityColorIdx_ = (uint8_t)LedColorSlot::CLEAR;
 
-  BlinkController blink_;
+  bool networkUp_ = true;
+  bool serverUp_ = true;
+
+  BlinkController blink_;       // housekeeping+active-call color blink
+  BlinkController linkBlink_;   // disconnect (white/pink) blink — independent of the above
   bool dirty_ = true;
 
   uint32_t colorFor(LedColorSlot slot) const;
   static LedColorSlot colorSlotForCallState(CallState state);
   void repaint();
+  // Dumps every active pixel's actual RGB hex value over debugdata() (visible
+  // on the /forms page's live debug log) — for bench-testing when the strip
+  // doesn't look right, to see exactly what the firmware thinks it's sending
+  // versus what physically lights up.
+  void logPixels(const char *reason) const;
 };

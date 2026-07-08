@@ -16,6 +16,14 @@ public:
   // DOOR_INDICATOR role, or the trailing LEDs for a bed/toilet unit that
   // also mirrors aggregate site status).
   virtual void setAggregateZone(const uint8_t *roomStates, uint8_t count) = 0;
+  // networkUp: WiFi STA associated / Ethernet linked (ITransport::isNetworkUp()).
+  // serverUp: the configured uplink protocol is actually connected (ITransport::isLinkUp()).
+  // When networkUp is false, the call zone blinks white/black, overriding
+  // everything else. Else when serverUp is false, it blinks pink/black.
+  // Both take priority over the normal call-state color — matches the
+  // reference firmware's setLedStatus(), which returns immediately once it
+  // decides the device is disconnected, before ever looking at call state.
+  virtual void setLinkStatus(bool networkUp, bool serverUp) = 0;
   virtual void tick(uint32_t nowMs) = 0;   // services blink + FastLED.show() when dirty
   virtual ~ILedController() = default;
 };

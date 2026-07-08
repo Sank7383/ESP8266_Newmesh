@@ -1,7 +1,18 @@
 #include "NurseCallConfig.h"
 #include <EEPROM.h>
 
-#define CONFIG_STRUCT_VERSION 1u
+// Bump this on ANY change to DeviceConfig's layout or field semantics, even
+// an append-only one — configLoad()'s mismatch check is the ONLY thing that
+// resets a device's EEPROM to sane defaults. Fields appended after a unit's
+// last flash-at-that-version keep whatever garbage bytes were already
+// sitting at that EEPROM offset (e.g. ledCall/ledToilet/ledAggregate,
+// ruleset, buttonMap were all added after version 1 first shipped) — that
+// garbage can silently produce "nothing behaves like it should" symptoms
+// (wrong LED strip length, bogus ruleset thresholds) that look like logic
+// bugs but are actually stale EEPROM. Bumped 1 -> 2 here to force one clean
+// reset onto the current layout; every unit will need its settings redone
+// once after this flashes.
+#define CONFIG_STRUCT_VERSION 2u
 #define CONFIG_EEPROM_OFFSET 100
 
 DeviceConfig myConfig;

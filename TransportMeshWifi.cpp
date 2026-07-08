@@ -57,8 +57,17 @@ void TransportMeshWifi::sendStatus(const StatusPayload &p) {
 }
 
 bool TransportMeshWifi::isLinkUp() const {
-  // A permissive "is any uplink mechanism up" signal for status/debug
-  // display; sendStatus() above checks the specific relevant client itself
-  // when it actually matters for delivery.
-  return webSocketClient.isConnected() || webSocketIo.isConnected() || meshLayerActive();
+  // Reflects the SPECIFIC protocol this device is configured to use — not
+  // "is any uplink mechanism up" (meshLayerActive() is true the instant the
+  // ESP-NOW radio initializes at boot, regardless of whether the upstream
+  // server is ever reachable, so folding it in here would make this true
+  // almost permanently and defeat its purpose as a "server down" signal).
+  return myConfig.socketio ? webSocketIo.isConnected() : webSocketClient.isConnected();
+}
+
+bool TransportMeshWifi::isNetworkUp() const {
+  // WiFi STA associated (or Ethernet linked, if that's what isConnected()
+  // is currently reporting for this device) — the network layer the uplink
+  // protocol above rides on.
+  return isConnected();
 }

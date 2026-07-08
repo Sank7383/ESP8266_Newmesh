@@ -54,3 +54,9 @@ void TransportEthernet::sendStatus(const StatusPayload &p) {
 bool TransportEthernet::isLinkUp() const {
   return linked_;
 }
+
+bool TransportEthernet::isNetworkUp() const {
+  // No separate server-handshake concept modeled for this route — PHY link
+  // is both tiers.
+  return linked_;
+}
