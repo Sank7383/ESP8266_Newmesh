@@ -36,10 +36,13 @@ void LedStripController::refreshConfig(const DeviceConfig &cfg) {
   bool newDefaultLedOn = cfg.default_led;
   uint32_t newIdleIntervalMs = (uint32_t)((cfg.Indicator_timer >= 5) ? cfg.Indicator_timer : 10) * 1000UL;
   uint8_t newBrightness = cfg.ledBrightness ? cfg.ledBrightness : 80;
+  bool newShareUnit = bedToiletShareUnit(cfg);
+  bool newToiletIndicationOnIdle = cfg.toiletIndicationOnIdle;
 
   bool changed = (newRole != role_) || (newColorRow != colorRow_) || (newCount != activeCount_) ||
                  (newDefaultLedOn != defaultLedOn_) || (newIdleIntervalMs != idleHeartbeatIntervalMs_) ||
-                 (newBrightness != FastLED.getBrightness());
+                 (newBrightness != FastLED.getBrightness()) || (newShareUnit != bedToiletShareUnit_) ||
+                 (newToiletIndicationOnIdle != toiletIndicationOnIdle_);
   if (!changed) return;
 
   role_ = newRole;
@@ -47,6 +50,8 @@ void LedStripController::refreshConfig(const DeviceConfig &cfg) {
   activeCount_ = newCount;
   defaultLedOn_ = newDefaultLedOn;
   idleHeartbeatIntervalMs_ = newIdleIntervalMs;
+  bedToiletShareUnit_ = newShareUnit;
+  toiletIndicationOnIdle_ = newToiletIndicationOnIdle;
   FastLED.setBrightness(newBrightness);
   dirty_ = true;
 }
@@ -70,8 +75,22 @@ LedColorSlot LedStripController::colorSlotForCallState(CallState state) {
     case CallState::EXTRA_HELP:  return LedColorSlot::EXTRA_ORANGE;
     case CallState::CODE_BLUE:   return LedColorSlot::CODE_BLUE;
     case CallState::TOILET_CALL: return LedColorSlot::CALL_RED;   // same red as a bed call, per spec
+    // HOUSEKEEPING/HOUSEKEEPING_CALL only ever reach this function via
+    // colorSlotForStatusCode() below — this device's OWN housekeeping flag
+    // is tracked separately (CallStatus::housekeeping) and never folded
+    // into mainState, so a local call never hits this case.
+    case CallState::HOUSEKEEPING:      return LedColorSlot::HK_PINK;
+    case CallState::HOUSEKEEPING_CALL: return LedColorSlot::HK_PINK;
     default:                     return LedColorSlot::CLEAR;
   }
+}
+
+LedColorSlot LedStripController::colorSlotForStatusCode(uint8_t code) {
+  // Peer/remote statuses only ever arrive as the plain reported number
+  // (CallStateMachine::reportedStatusCode()'s output), never a CallState —
+  // route through the same names colorSlotForCallState uses so a "5" from
+  // the network looks the same as a locally-driven TOILET_CALL.
+  return colorSlotForCallState((CallState)code);
 }
 
 void LedStripController::setCallZone(const CallStateMachine::CallStatus &status, const CallRulesetConfig &ruleset) {
@@ -86,12 +105,14 @@ void LedStripController::setCallZone(const CallStateMachine::CallStatus &status,
                          : (uint8_t)LedColorSlot::CLEAR;
   }
 
-  bool anyActiveCall = (status.mainState != CallState::IDLE) || status.toiletCallActive;
-
-  // Housekeeping + an active call blinks between the housekeeping color and
-  // the specific active-call color — richer local feedback than the single
-  // collapsed "status 8" the server sees (CallStateMachine::reportedStatusCode).
-  blink_.setEnabled(status.housekeeping && anyActiveCall);
+  // Housekeeping + an active BED call blinks leds_[0] between the
+  // housekeeping color and the specific active-call color — richer local
+  // feedback than the single collapsed "status 8" the server sees
+  // (CallStateMachine::reportedStatusCode). Deliberately keyed on mainState
+  // only, not toiletCallActive — leds_[0] is the bed's own zone now, the
+  // toilet has its own zone (leds_[1]) that doesn't blink.
+  bool bedActive = (status.mainState != CallState::IDLE);
+  blink_.setEnabled(status.housekeeping && bedActive);
 
   dirty_ = true;
 }
@@ -101,10 +122,14 @@ void LedStripController::setAggregateZone(const uint8_t *roomStates, uint8_t cou
   for (uint8_t i = 0; i < count; i++) {
     if (roomStates[i] > maxStatus) maxStatus = roomStates[i];
   }
-  uint8_t newIdx = (maxStatus == 0) ? (uint8_t)LedColorSlot::CLEAR
-                                     : (uint8_t)min((int)maxStatus, LED_COLOR_SLOT_COUNT - 1);
-  if (newIdx == aggregatePriorityColorIdx_) return;
-  aggregatePriorityColorIdx_ = newIdx;
+  if (maxStatus == aggregateMaxStatus_) return;
+  aggregateMaxStatus_ = maxStatus;
+  dirty_ = true;
+}
+
+void LedStripController::setToiletRemoteStatus(uint8_t statusCode) {
+  if (statusCode == toiletRemoteStatus_) return;
+  toiletRemoteStatus_ = statusCode;
   dirty_ = true;
 }
 
@@ -133,39 +158,57 @@ void LedStripController::repaint() {
     return;
   }
 
-  // The color for whatever's currently active, as a raw table lookup —
-  // CallState::CUSTOM is the one case that doesn't map to a fixed
-  // LedColorSlot, it uses the site-configured customColorIdx_ instead.
-  auto activeCallColor = [&]() -> uint32_t {
+  // leds_[0] — this device's OWN call status ONLY. Toilet is a separate
+  // zone (leds_[1], below) now, so toiletCallActive deliberately plays no
+  // part here anymore — a toilet-only call no longer lights leds_[0].
+  auto ownActiveColor = [&]() -> uint32_t {
     if (lastStatus_.mainState == CallState::CUSTOM) return LED_COLOUR[colorRow_][customColorIdx_];
-    if (lastStatus_.mainState != CallState::IDLE) return colorFor(colorSlotForCallState(lastStatus_.mainState));
-    return colorFor(LedColorSlot::CALL_RED);   // toilet call
+    return colorFor(colorSlotForCallState(lastStatus_.mainState));
   };
 
+  bool bedActive = (lastStatus_.mainState != CallState::IDLE);
   uint32_t callColorRaw;
   if (lastStatus_.housekeeping) {
-    bool anyActiveCall = (lastStatus_.mainState != CallState::IDLE) || lastStatus_.toiletCallActive;
-    if (anyActiveCall) {
-      callColorRaw = blink_.isOn() ? activeCallColor() : colorFor(LedColorSlot::HK_PINK);
-    } else {
-      callColorRaw = colorFor(LedColorSlot::HK_PINK);   // steady housekeeping-only
-    }
-  } else if (lastStatus_.mainState != CallState::IDLE || lastStatus_.toiletCallActive) {
-    callColorRaw = activeCallColor();
+    callColorRaw = bedActive ? (blink_.isOn() ? ownActiveColor() : colorFor(LedColorSlot::HK_PINK))
+                              : colorFor(LedColorSlot::HK_PINK);   // steady housekeeping-only
+  } else if (bedActive) {
+    callColorRaw = ownActiveColor();
   } else {
     callColorRaw = idleColorRaw();
   }
-
   CRGB callColor = (CRGB)callColorRaw;
 
+  // leds_[1] — the TOILET's status. Shared unit (toiletid==0 or ==this
+  // device's own machineid): derived from this device's own toiletCallActive
+  // flag. Distinct toiletid: derived from the last "j<toiletid>,<status>"
+  // report seen for that id (setToiletRemoteStatus(), fed by the .ino ONLY
+  // from this bed unit's own button-routed sends and genuine incoming
+  // "j<toiletid>,X" reports from the toilet's own device — never from the
+  // generic door/aggregate "highest across all rooms" computation, so this
+  // zone can't be moved by unrelated server/room activity).
+  bool toiletHasCall = bedToiletShareUnit_ ? lastStatus_.toiletCallActive : (toiletRemoteStatus_ != 0);
+  uint32_t toiletColorRaw;
+  if (toiletHasCall) {
+    toiletColorRaw = bedToiletShareUnit_ ? colorFor(colorSlotForCallState(CallState::TOILET_CALL))
+                                          : colorFor(colorSlotForStatusCode(toiletRemoteStatus_));
+  } else {
+    // "Toilet Idle Indication" Off: stay fully dark when there's no call,
+    // instead of idleColorRaw()'s steady/heartbeat idle display.
+    toiletColorRaw = toiletIndicationOnIdle_ ? idleColorRaw() : colorFor(LedColorSlot::CLEAR);
+  }
+  CRGB toiletColor = (CRGB)toiletColorRaw;
+
+  // leds_[2..] (or the whole strip for a door indicator) — the multi-room
+  // aggregate/door-priority zone, fed by LedAggregator via setAggregateZone().
+  uint32_t aggRaw = (aggregateMaxStatus_ == 0) ? idleColorRaw() : colorFor(colorSlotForStatusCode(aggregateMaxStatus_));
+  CRGB aggColor = (CRGB)aggRaw;
+
   if (role_ == DeviceRole::DOOR_INDICATOR) {
-    bool aggregateIdle = (aggregatePriorityColorIdx_ == (uint8_t)LedColorSlot::CLEAR);
-    CRGB c = aggregateIdle ? (CRGB)idleColorRaw() : (CRGB)LED_COLOUR[colorRow_][aggregatePriorityColorIdx_];
-    for (uint8_t i = 0; i < activeCount_; i++) leds_[i] = c;
+    for (uint8_t i = 0; i < activeCount_; i++) leds_[i] = aggColor;
   } else {
     if (activeCount_ > 0) leds_[0] = callColor;
-    CRGB aggColor = (CRGB)LED_COLOUR[colorRow_][aggregatePriorityColorIdx_];
-    for (uint8_t i = 1; i < activeCount_; i++) leds_[i] = aggColor;
+    if (activeCount_ > 1) leds_[1] = toiletColor;
+    for (uint8_t i = 2; i < activeCount_; i++) leds_[i] = aggColor;
   }
 
   FastLED.show();

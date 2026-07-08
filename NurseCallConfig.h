@@ -183,6 +183,11 @@ struct DeviceConfig {
   LedZoneConfig     ledCall;
   LedZoneConfig     ledToilet;
   LedZoneConfig     ledAggregate;
+  // Whether leds_[1] (the toilet zone) shows idleColorRaw() (steady/heartbeat
+  // per Default LED On) when the toilet has no active call, or just stays
+  // fully off regardless of Default LED On. Only affects the no-call idle
+  // display — an actual active toilet call always shows regardless of this.
+  bool              toiletIndicationOnIdle;
 };
 
 extern DeviceConfig myConfig;
@@ -192,7 +197,10 @@ bool configLoad();   // EEPROM.begin(4096); EEPROM.get(100,myConfig); structVers
 void configSave();   // EEPROM.put(100,myConfig); EEPROM.commit();
 
 // bed_toi_common is DERIVED, not stored, matching the legacy behavior.
-inline bool bedToiletShareUnit(const DeviceConfig &c) { return c.toiletid == c.machineid; }
+// toiletid==0 means "no separate toilet unit configured" (the toilet pull
+// cord, if any, is this same device's own) — same outcome as toiletid
+// equalling this device's own machineid, so both count as "shared".
+inline bool bedToiletShareUnit(const DeviceConfig &c) { return c.toiletid == 0 || c.toiletid == c.machineid; }
 
 // Typed, validating accessors used by the settings-form parser (DeviceProtocol.cpp)
 // to keep out-of-range values from ever reaching array indices (button_array[],

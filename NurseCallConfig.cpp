@@ -11,8 +11,9 @@
 // (wrong LED strip length, bogus ruleset thresholds) that look like logic
 // bugs but are actually stale EEPROM. Bumped 1 -> 2 here to force one clean
 // reset onto the current layout; every unit will need its settings redone
-// once after this flashes.
-#define CONFIG_STRUCT_VERSION 2u
+// once after this flashes. Bumped 2 -> 3 for the added toiletIndicationOnIdle
+// field.
+#define CONFIG_STRUCT_VERSION 3u
 #define CONFIG_EEPROM_OFFSET 100
 
 DeviceConfig myConfig;
@@ -108,6 +109,8 @@ void configApplyDefaults(DeviceConfig &c) {
   c.ledCall = { 0, 8, 0, 80 };       // pin, count, colorRow, brightness
   c.ledToilet = { 0, 8, 0, 80 };     // shares the strip with ledCall in bed-unit layout
   c.ledAggregate = { 0, 8, 0, 80 };
+
+  c.toiletIndicationOnIdle = true;
 }
 
 bool configLoad() {

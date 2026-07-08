@@ -34,6 +34,18 @@ public:
   const uint8_t* roomStates() const { return statuses_; }
   uint8_t count() const { return count_; }
 
+  // Looks up one specific room's last-known status by id — used for the
+  // toilet zone (leds_[1]) on a bed unit whose toiletid names a distinct
+  // logical device, as opposed to roomStates()/count() which only expose
+  // the flat "highest priority across all rooms" view used for the
+  // door-indicator/aggregate zone.
+  uint8_t statusFor(uint16_t roomId) const {
+    for (uint8_t i = 0; i < count_; i++) {
+      if (roomIds_[i] == roomId) return statuses_[i];
+    }
+    return 0;
+  }
+
 private:
   uint16_t roomIds_[MAX_ROOMS];
   uint8_t statuses_[MAX_ROOMS];

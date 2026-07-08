@@ -36,6 +36,7 @@ public:
   void refreshConfig(const DeviceConfig &cfg) override;
   void setCallZone(const CallStateMachine::CallStatus &status, const CallRulesetConfig &ruleset) override;
   void setAggregateZone(const uint8_t *roomStates, uint8_t count) override;
+  void setToiletRemoteStatus(uint8_t statusCode) override;
   void setLinkStatus(bool networkUp, bool serverUp) override;
   void tick(uint32_t nowMs) override;
 
@@ -47,7 +48,23 @@ private:
 
   CallStateMachine::CallStatus lastStatus_;
   uint8_t customColorIdx_ = (uint8_t)LedColorSlot::CLEAR;   // raw color-table index for CallState::CUSTOM
-  uint8_t aggregatePriorityColorIdx_ = (uint8_t)LedColorSlot::CLEAR;
+  // Both hold a raw server status code (CallStateMachine::reportedStatusCode()
+  // range, 0-8 + custom), NOT a LedColorSlot index — colorSlotForStatusCode()
+  // maps one to the other at paint time.
+  uint8_t aggregateMaxStatus_ = 0;
+  uint8_t toiletRemoteStatus_ = 0;
+
+  // leds_[1] zone: derived locally from lastStatus_.toiletCallActive when
+  // this bed unit IS the toilet's own device (myConfig.toiletid==0 or
+  // ==machineid); derived from toiletRemoteStatus_ instead when toiletid
+  // names a distinct device — see setToiletRemoteStatus().
+  bool bedToiletShareUnit_ = true;
+  // "Toilet Idle Indication" (myConfig.toiletIndicationOnIdle, Form 3): only
+  // affects leds_[1] when the toilet has NO active call — On (default)
+  // shows idleColorRaw() there like every other zone; Off forces it fully
+  // dark instead, regardless of Default LED On. An active toilet call
+  // always shows either way.
+  bool toiletIndicationOnIdle_ = true;
 
   bool networkUp_ = true;
   bool serverUp_ = true;
@@ -69,6 +86,11 @@ private:
   uint32_t colorFor(LedColorSlot slot) const;
   uint32_t idleColorRaw() const;
   static LedColorSlot colorSlotForCallState(CallState state);
+  // Maps a raw reported status CODE (as opposed to colorSlotForCallState's
+  // CallState enum) to a display color — used for the aggregate/door zone
+  // and the remote-toilet zone, both of which only ever see the plain
+  // number a peer device reported, not a CallState.
+  static LedColorSlot colorSlotForStatusCode(uint8_t code);
   void repaint();
   // Dumps every active pixel's actual RGB hex value over debugdata() (visible
   // on the /forms page's live debug log) — for bench-testing when the strip

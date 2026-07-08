@@ -91,23 +91,63 @@ void loop() {
         debugdata(String("BUTTON RELEASED: " + String(buttonActionName(ev.action)) +
                           (ev.isLongPress ? " (long press)" : " (short press)")).c_str());
 
-        bool legal = CallStateMachine::apply(
-            g_callStatus, ev.action, ev.isLongPress,
-            bedToiletShareUnit(myConfig), myConfig.ruleset, myConfig.houseKeepings);
+        // Reports a status for the SEPARATE toilet device's own identity
+        // (myConfig.toiletid) — used when the toilet pull-cord is physically
+        // wired into THIS bed unit's shift register but toiletid names a
+        // distinct logical device on the mesh/server, not this one. Updates
+        // g_roomAggregator directly (not just sendStatus's own "j" broadcast)
+        // so leds_[1] reflects it immediately without waiting on a mesh
+        // round-trip back to this same device.
+        auto sendToiletStatus = [](uint8_t status) {
+          g_roomAggregator.updateRoom((uint16_t)myConfig.toiletid, status);
+          StatusPayload toiletPayload;
+          toiletPayload.deviceId = (uint16_t)myConfig.toiletid;
+          toiletPayload.statusCode = status;
+          debugdata(String("TOILET(separate id=" + String(myConfig.toiletid) + "): SEND status=" +
+                            String(status)).c_str());
+          g_statusUplink->sendStatus(toiletPayload);
+        };
 
-        debugdata(String("STATE: " + String(legal ? "ACCEPTED" : "REJECTED") +
-                          " -> mainState=" + String((int)g_callStatus.mainState) +
-                          " toilet=" + String(g_callStatus.toiletCallActive ? 1 : 0) +
-                          " housekeeping=" + String(g_callStatus.housekeeping ? 1 : 0)).c_str());
+        if (ev.action == ButtonAction::TOILET_CALL && !bedToiletShareUnit(myConfig)) {
+          // This deliberately bypasses CallStateMachine::apply() entirely:
+          // it's a routing decision (whose identity this report belongs
+          // to), not a change to this bed's own CallStatus, so
+          // g_callStatus/leds_[0] are untouched. Toilet-Call(5) is reserved
+          // for the bedToiletShareUnit()==true case below, where there's no
+          // separate identity to address and the toilet call folds into
+          // this device's own combined report instead.
+          sendToiletStatus((uint8_t)CallState::CALL);
+        }
+        else {
+          bool legal = CallStateMachine::apply(
+              g_callStatus, ev.action, ev.isLongPress,
+              bedToiletShareUnit(myConfig), myConfig.ruleset, myConfig.houseKeepings);
 
-        if (legal) {
-          StatusPayload payload;
-          payload.deviceId = (uint16_t)myConfig.machineid;
-          payload.statusCode = CallStateMachine::reportedStatusCode(g_callStatus, myConfig.ruleset);
-          debugdata(String("SEND: statusCode=" + String(payload.statusCode) +
-                            " via route=" + String(myConfig.routeType) +
-                            " linkUp=" + String(g_statusUplink->isLinkUp() ? 1 : 0)).c_str());
-          g_statusUplink->sendStatus(payload);
+          debugdata(String("STATE: " + String(legal ? "ACCEPTED" : "REJECTED") +
+                            " -> mainState=" + String((int)g_callStatus.mainState) +
+                            " toilet=" + String(g_callStatus.toiletCallActive ? 1 : 0) +
+                            " housekeeping=" + String(g_callStatus.housekeeping ? 1 : 0)).c_str());
+
+          if (legal) {
+            StatusPayload payload;
+            payload.deviceId = (uint16_t)myConfig.machineid;
+            payload.statusCode = CallStateMachine::reportedStatusCode(g_callStatus, myConfig.ruleset);
+            debugdata(String("SEND: statusCode=" + String(payload.statusCode) +
+                              " via route=" + String(myConfig.routeType) +
+                              " linkUp=" + String(g_statusUplink->isLinkUp() ? 1 : 0)).c_str());
+            g_statusUplink->sendStatus(payload);
+          }
+
+          // Clear/Cancel is a whole-room reset: as well as whatever it just
+          // did to this bed's own CallStatus above (per the normal ruleset),
+          // it also clears the SEPARATE toilet device's status, since the
+          // TOILET_CALL branch above never touches g_callStatus for that
+          // case and so has no "clear via CANCEL" path of its own otherwise.
+          // Unconditional (not gated on `legal`) — the toilet clear isn't
+          // subject to this bed's own cancel ruleset restrictions.
+          if (ev.action == ButtonAction::CANCEL && !bedToiletShareUnit(myConfig)) {
+            sendToiletStatus((uint8_t)CallState::IDLE);
+          }
         }
       }
     }
@@ -117,6 +157,7 @@ void loop() {
   g_ledController->refreshConfig(myConfig);
   g_ledController->setCallZone(g_callStatus, myConfig.ruleset);
   g_ledController->setAggregateZone(g_roomAggregator.roomStates(), g_roomAggregator.count());
+  g_ledController->setToiletRemoteStatus(g_roomAggregator.statusFor((uint16_t)myConfig.toiletid));
   g_ledController->setLinkStatus(g_statusUplink->isNetworkUp(), g_statusUplink->isLinkUp());
   g_ledController->tick(now);
 }
