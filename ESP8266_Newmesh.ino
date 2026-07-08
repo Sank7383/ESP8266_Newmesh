@@ -16,7 +16,7 @@
 
 // These must be defined before NewMeshNOW.h is included — they gate which
 // legacy code paths inside that vendored header compile in.
-#define MQTTNOTREQUIRED
+// #define MQTTNOTREQUIRED
 #define NURSECALLING
 #define NURSECALLNEW
 #define ESPNOWACTIVE

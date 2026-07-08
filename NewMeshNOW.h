@@ -657,29 +657,18 @@ void Mysubscribe(int id, int unsub)
     client.subscribe(subscribe);
 }
 
+// removeAll()/connectAll() originally walked Espalexa's `extradevices` linked
+// list (one MQTT subscribe per virtual Alexa-exposed device sharing this
+// ESP8266) to un/resubscribe them on MQTT connect/disconnect. Espalexa was
+// intentionally dropped from this rewrite (see plan) — no `espalexa` object
+// or `extradevices` concept exists here — so these are now no-ops, kept
+// only so reconnect()'s existing connectAll() call site still compiles.
+// removeAll() itself has no callers left; kept for symmetry/documentation.
 void removeAll()
 {
-  struct deviceStruct *d = espalexa.extradevices;
-  while (d != nullptr)
-  {
-    if (d->id > 0)
-    {
-      Mysubscribe(d->id, 1);
-    }
-    d = d->next;
-  }
 }
 void connectAll()
 {
-  struct deviceStruct *d = espalexa.extradevices;
-  while (d != nullptr)
-  {
-    if (d->id > 0)
-    {
-      Mysubscribe(d->id, 0);
-    }
-    d = d->next;
-  }
 }
 #endif
 
@@ -688,29 +677,12 @@ char myID[10];
 
 #ifndef MQTTNOTREQUIRED
 char ds[100];
-void ForwardPublish(const char*msm)
+// See removeAll()/connectAll() above — same Espalexa `extradevices` walk,
+// same reason it's now a no-op. Kept only so its MQTT-payload-handler call
+// site (further down this file) still compiles.
+void ForwardPublish(const char *msm)
 {
-  struct deviceStruct *d = espalexa.extradevices;
-
-  while (d != nullptr)
-  {
-    if (d->id > 0)
-    {
-      sprintf(ds,"%d=",d->id);
-      if (strncmp(msm,ds,strlen(ds))==0)
-      {
-        strlcpy(subscribe, "light-out/", sizeof(subscribe));
-        itoa(d->id, myID, 16);
-        strlcat(subscribe, (char *)myID, sizeof(subscribe));
-        strlcat(subscribe, "/", sizeof(subscribe));
-        itoa(d->id, myID, 10);
-        strlcat(subscribe, (char *)myID, sizeof(subscribe));
-        client.publish(subscribe, msm+strlen(ds));
-        return;
-      }
-    }
-    d = d->next;
-  }
+  (void)msm;
 }
 #endif
 int devicelist = 0;
