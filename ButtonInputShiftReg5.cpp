@@ -68,16 +68,18 @@ bool ButtonInputShiftReg5::poll(uint32_t nowMs, ButtonEvent &out) {
   int8_t slot = decodeSlot(raw, (uint8_t)myConfig.buttonPcbRevision);
   uint8_t logicalKey = (slot < 0) ? DEBOUNCE_NO_KEY : (uint8_t)slot;
 
-  uint8_t releasedSlot;
+  uint8_t slotIdx;
   bool isLongPress;
-  if (!debounce_.update(logicalKey, nowMs, releasedSlot, isLongPress)) return false;
-  if (releasedSlot >= 7) return false;
+  DebounceResult result = debounce_.update(logicalKey, nowMs, slotIdx, isLongPress);
+  if (result == DebounceResult::NONE) return false;
+  if (slotIdx >= 7) return false;
 
-  ButtonAction action = map_.slot[releasedSlot];
+  ButtonAction action = map_.slot[slotIdx];
   if (action == ButtonAction::NONE) return false;   // remapped-out slot (e.g. "3-button" variant)
 
   out = ButtonEvent{};
   out.action = action;
+  out.type = (result == DebounceResult::PRESSED) ? ButtonEventType::PRESSED : ButtonEventType::RELEASED;
   out.isLongPress = isLongPress;
   out.palmAttached = lastPalmAttached_;
   return true;

@@ -77,21 +77,38 @@ void loop() {
   if (g_buttonInput) {
     ButtonEvent ev;
     if (g_buttonInput->poll(now, ev)) {
-      // Audible feedback fires on every real button press, regardless of
-      // whether the resulting state transition turns out to be legal —
-      // PALM_ATTACHED is an accessory-presence signal, not a press, so it
-      // stays silent.
-      if (ev.action != ButtonAction::PALM_ATTACHED) g_buzzer.trigger(now);
+      if (ev.type == ButtonEventType::PRESSED) {
+        // Instant audible feedback on PRESS, not release — otherwise there's
+        // no way to tell a press registered until the finger comes off the
+        // button. PALM_ATTACHED is an accessory-presence signal, not a
+        // press, so it stays silent (its type defaults to RELEASED anyway).
+        debugdata(String("BUTTON PRESSED: " + String(buttonActionName(ev.action))).c_str());
+        if (ev.action != ButtonAction::PALM_ATTACHED) g_buzzer.trigger(now);
+        // Long-press vs short-press isn't known yet — the actual call-state
+        // action is only applied below, on RELEASED.
+      }
+      else {
+        debugdata(String("BUTTON RELEASED: " + String(buttonActionName(ev.action)) +
+                          (ev.isLongPress ? " (long press)" : " (short press)")).c_str());
 
-      bool legal = CallStateMachine::apply(
-          g_callStatus, ev.action, ev.isLongPress,
-          bedToiletShareUnit(myConfig), myConfig.ruleset, myConfig.houseKeepings);
+        bool legal = CallStateMachine::apply(
+            g_callStatus, ev.action, ev.isLongPress,
+            bedToiletShareUnit(myConfig), myConfig.ruleset, myConfig.houseKeepings);
 
-      if (legal) {
-        StatusPayload payload;
-        payload.deviceId = (uint16_t)myConfig.machineid;
-        payload.statusCode = CallStateMachine::reportedStatusCode(g_callStatus, myConfig.ruleset);
-        g_statusUplink->sendStatus(payload);
+        debugdata(String("STATE: " + String(legal ? "ACCEPTED" : "REJECTED") +
+                          " -> mainState=" + String((int)g_callStatus.mainState) +
+                          " toilet=" + String(g_callStatus.toiletCallActive ? 1 : 0) +
+                          " housekeeping=" + String(g_callStatus.housekeeping ? 1 : 0)).c_str());
+
+        if (legal) {
+          StatusPayload payload;
+          payload.deviceId = (uint16_t)myConfig.machineid;
+          payload.statusCode = CallStateMachine::reportedStatusCode(g_callStatus, myConfig.ruleset);
+          debugdata(String("SEND: statusCode=" + String(payload.statusCode) +
+                            " via route=" + String(myConfig.routeType) +
+                            " linkUp=" + String(g_statusUplink->isLinkUp() ? 1 : 0)).c_str());
+          g_statusUplink->sendStatus(payload);
+        }
       }
     }
   }
@@ -100,4 +117,16 @@ void loop() {
   g_ledController->setCallZone(g_callStatus, myConfig.ruleset);
   g_ledController->setAggregateZone(g_roomAggregator.roomStates(), g_roomAggregator.count());
   g_ledController->tick(now);
+}
+
+// Forward-declared and called from NewMeshNOW.h's uplinkHealthCheck() once
+// the uplink comes back up after being down — re-pushes the device's
+// current status so the server isn't left with a stale value from before
+// the outage.
+void resendCurrentStatus() {
+  if (!g_statusUplink) return;
+  StatusPayload payload;
+  payload.deviceId = (uint16_t)myConfig.machineid;
+  payload.statusCode = CallStateMachine::reportedStatusCode(g_callStatus, myConfig.ruleset);
+  g_statusUplink->sendStatus(payload);
 }

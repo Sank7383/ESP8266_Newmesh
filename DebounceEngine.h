@@ -3,15 +3,20 @@
 
 #define DEBOUNCE_NO_KEY 0xFF
 
+enum class DebounceResult : uint8_t { NONE, PRESSED, RELEASED };
+
 // One shared time-based debounce + press-duration primitive used by every
 // IButtonInput implementation. Replaces the legacy firmware's two divergent
 // debounce styles (a ~60-consecutive-poll hold-time counter on the raw
 // shift-register byte, and a plain change-detector on the decoded logical
 // value) with a single millis()-based implementation.
 //
-// The confirmed event fires on RELEASE (not on press) so press-duration —
-// and therefore long-press vs short-press — is always known by the time the
-// caller sees the event; no busy-wait loop is needed.
+// Fires TWICE per button press: PRESSED the moment the press debounces
+// stable (so callers can give instant feedback, e.g. a buzzer beep), and
+// RELEASED when it's let go (with isLongPress known by then, since the full
+// hold duration has elapsed) — the actual call-state action should only be
+// applied on RELEASED, since long-press vs short-press isn't known until
+// then.
 class DebounceEngine {
 public:
   void begin(uint16_t stableMs = 50, uint16_t longPressMs = 800) {
@@ -24,24 +29,25 @@ public:
   }
 
   // rawKey: the currently-sampled logical key (DEBOUNCE_NO_KEY if none pressed).
-  // Returns true exactly once, on the release of a debounced press, with
-  // outKey set to the button that was released and outIsLongPress reflecting
-  // hold duration.
-  bool update(uint8_t rawKey, uint32_t nowMs, uint8_t &outKey, bool &outIsLongPress) {
+  // outKey: on PRESSED, the key that just went down; on RELEASED, the key
+  // that was just let go. outIsLongPress is only meaningful on RELEASED.
+  DebounceResult update(uint8_t rawKey, uint32_t nowMs, uint8_t &outKey, bool &outIsLongPress) {
     if (rawKey != candidate_) {
       candidate_ = rawKey;
       candidateSinceMs_ = nowMs;
-      return false;
+      return DebounceResult::NONE;
     }
 
-    if ((uint32_t)(nowMs - candidateSinceMs_) < stableMs_) return false;
-    if (candidate_ == confirmed_) return false;   // already-settled state, nothing new
+    if ((uint32_t)(nowMs - candidateSinceMs_) < stableMs_) return DebounceResult::NONE;
+    if (candidate_ == confirmed_) return DebounceResult::NONE;   // already-settled state, nothing new
 
     if (candidate_ != DEBOUNCE_NO_KEY) {
-      // New stable press.
+      // New stable press — fire immediately, before release, so the caller
+      // can give instant feedback.
       confirmed_ = candidate_;
       pressStartMs_ = nowMs;
-      return false;
+      outKey = confirmed_;
+      return DebounceResult::PRESSED;
     }
 
     // New stable release of whatever was previously confirmed as pressed.
@@ -49,7 +55,7 @@ public:
     confirmed_ = DEBOUNCE_NO_KEY;
     outKey = releasedKey;
     outIsLongPress = (uint32_t)(nowMs - pressStartMs_) >= longPressMs_;
-    return true;
+    return DebounceResult::RELEASED;
   }
 
 private:

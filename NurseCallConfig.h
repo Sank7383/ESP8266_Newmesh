@@ -38,6 +38,23 @@ enum class ButtonAction : uint8_t {
 
 enum class RulesetPreset : uint8_t { HOUSEKEEPING_DEFAULT = 0, LEGACY_RS485 = 1, CUSTOM = 2 };
 
+// Human-readable name for live trace logging (debugdata()) — not used for
+// anything protocol-facing.
+inline const char* buttonActionName(ButtonAction a) {
+  switch (a) {
+    case ButtonAction::CALL: return "CALL";
+    case ButtonAction::CANCEL: return "CANCEL";
+    case ButtonAction::TOILET_CALL: return "TOILET_CALL";
+    case ButtonAction::EXTRA_HELP: return "EXTRA_HELP";
+    case ButtonAction::CODE_BLUE: return "CODE_BLUE";
+    case ButtonAction::HOUSEKEEPING: return "HOUSEKEEPING";
+    case ButtonAction::PALM_ATTACHED: return "PALM_ATTACHED";
+    case ButtonAction::AP_MODE: return "AP_MODE";
+    case ButtonAction::CARE: return "CARE";
+    default: return "NONE";
+  }
+}
+
 // Fixed slot order matches the legacy HC165 button_array[7] table:
 // {cancel, call, toi, extra, blue, attend, ap}
 struct ButtonActionMap {

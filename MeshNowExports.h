@@ -3,6 +3,7 @@
 #include <ESP8266WebServer.h>
 #include <WebSocketsServer.h>
 #include <WebSocketsClient.h>
+#include <SocketIOclient.h>
 
 // Extern-only glue header. NewMeshNOW.h / MYESPNOW.h are "single translation
 // unit" style headers (full function bodies + global variable definitions,
@@ -14,6 +15,7 @@
 extern ESP8266WebServer server;
 extern WebSocketsServer webSocket;
 extern WebSocketsClient webSocketClient;
+extern SocketIOclient webSocketIo;
 extern String ID;
 extern bool amServer;
 extern int ethercon;
@@ -22,7 +24,10 @@ extern uint8_t espnowaval;
 extern bool esp8266_now_active;
 extern IPAddress apIP;
 extern int wscdisconnect;       // consecutive uplink-reconnect count, see webSocketEventClient
-extern unsigned long lst_wscon; // millis() timestamp of the last successful uplink connect (0 = never)
+extern unsigned long lst_wscon; // millis() timestamp of the last successful WebSocket uplink connect (0 = never)
+extern bool socketconnectedio;  // true when the Socket.IO uplink is connected
+extern unsigned long lst_con;   // millis() timestamp of the last Socket.IO connect/disconnect event
+extern uint16_t uplinkFailCount;
 
 bool AmServer();
 bool isConnected();

@@ -193,17 +193,19 @@ void sendFormData(int formno) {
     // "not connecting to server" and "LED color not changing" are both
     // answerable from this one page instead of guessing.
     bool staConnected = (WiFi.status() == WL_CONNECTED);
-    String uplinkTarget = myConfig.socketio
-        ? String("SocketIO NOT IMPLEMENTED YET (selected in Network settings - switch to WebSocket)")
-        : (strlen(myConfig.myServer) > 0 ? String(myConfig.myServer) + ":" + String(myConfig.myPort)
-                                          : String("(myServer is empty - uplink never attempts to connect)"));
-    String secsSinceUplinkOk = (lst_wscon == 0) ? String("never")
-                                                 : String((millis() - lst_wscon) / 1000) + "s ago";
+    String uplinkTarget = strlen(myConfig.myServer) > 0
+        ? String(myConfig.myServer) + ":" + String(myConfig.myPort) + (myConfig.socketio ? " (SocketIO)" : " (WebSocket)")
+        : String("(myServer is empty - uplink never attempts to connect)");
+    bool uplinkUp = myConfig.socketio ? webSocketIo.isConnected() : webSocketClient.isConnected();
+    String secsSinceUplinkOk = myConfig.socketio
+        ? ((lst_con == 0) ? String("never") : String((millis() - lst_con) / 1000) + "s ago")
+        : ((lst_wscon == 0) ? String("never") : String((millis() - lst_wscon) / 1000) + "s ago");
 
-    // NOTE: urlencode(String) silently drops any char below ASCII 32
-    // (see NewMeshNOW.h) — so " | " is used as the line separator here
-    // instead of "\n", which would otherwise vanish entirely on the wire.
-    const char *SEP = " | ";
+    // Real newlines — urlencode(String) now correctly percent-encodes
+    // control characters as %0A instead of dropping them (see NewMeshNOW.h),
+    // so this round-trips through decodeURIComponent() on the client as
+    // actual line breaks in the Debug textarea.
+    const char *SEP = "\n";
     String d;
     d.reserve(400);
     d += "WiFi:" + (staConnected ? WiFi.SSID() : String("none")) +
@@ -213,8 +215,9 @@ void sendFormData(int formno) {
          " clients:" + String(WiFi.softAPgetStationNum()) +
          " role:" + String(isConnected() ? "bridged" : "standalone") + SEP;
     d += "Uplink target:" + uplinkTarget +
-         " wsConnected:" + String(webSocketClient.isConnected() ? 1 : 0) +
+         " connected:" + String(uplinkUp ? 1 : 0) +
          " lastOK:" + secsSinceUplinkOk +
+         " failCount:" + String(uplinkFailCount) +
          " reconnects:" + String(wscdisconnect) + SEP;
     d += "Route:" + String(myConfig.routeType) + " amServer:" + String(amServer ? 1 : 0) +
          " eth:" + String(ethercon) + " espnow:" + String(meshLayerActive() ? 1 : 0) + SEP;

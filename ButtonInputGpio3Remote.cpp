@@ -19,16 +19,18 @@ bool ButtonInputGpio3Remote::poll(uint32_t nowMs, ButtonEvent &out) {
   if (cancelActive) logicalKey = 0;
   else if (callActive) logicalKey = 1;
 
-  uint8_t releasedSlot;
+  uint8_t slotIdx;
   bool isLongPress;
-  if (!debounce_.update(logicalKey, nowMs, releasedSlot, isLongPress)) return false;
-  if (releasedSlot > 1) return false;
+  DebounceResult result = debounce_.update(logicalKey, nowMs, slotIdx, isLongPress);
+  if (result == DebounceResult::NONE) return false;
+  if (slotIdx > 1) return false;
 
-  ButtonAction action = map_.slot[releasedSlot];
+  ButtonAction action = map_.slot[slotIdx];
   if (action == ButtonAction::NONE) return false;
 
   out = ButtonEvent{};
   out.action = action;
+  out.type = (result == DebounceResult::PRESSED) ? ButtonEventType::PRESSED : ButtonEventType::RELEASED;
   out.isLongPress = isLongPress;
   return true;
 }

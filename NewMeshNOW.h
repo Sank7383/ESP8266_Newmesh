@@ -229,9 +229,18 @@ bool addAP(const char *ssid, const char *passphrase)
   return APlistAdd(ssid, passphrase);
 }
 
+#include <SocketIOclient.h>
+
 ESP8266WebServer server(80);
 WebSocketsServer webSocket = WebSocketsServer(81);
 WebSocketsClient webSocketClient;
+SocketIOclient webSocketIo;
+String socketIoPath;
+bool socketconnectedio = false;
+unsigned long lst_con = 0;
+uint16_t uplinkFailCount = 0;
+void socketIOEvent(socketIOmessageType_t type, uint8_t *payload, size_t length);
+void resendCurrentStatus();   // implemented in ESP8266_Newmesh.ino — re-pushes g_callStatus once the uplink reconnects
 #include "MYESPNOW.h"
 #define EMMDBG_WIFI 1
 
@@ -334,8 +343,11 @@ String urlencode(String str)
   for (int i = 0; i < str.length(); i++)
   {
     c = str.charAt(i);
-    if (c >= 123 || c < 32)
-      continue;
+    // Percent-encode control characters (e.g. '\n') instead of silently
+    // dropping them — a dropped newline in a multi-line settings/debug
+    // value used to vanish on the wire with no indication anything was
+    // wrong. Bytes >=123 are still passed to the else branch below and
+    // percent-encoded normally rather than skipped.
     if (c == ' ')
     {
       encodedString += '+';
@@ -372,7 +384,14 @@ String urlencode(String str)
 int connum=-1;
 void debugdata(const char *buf)
 {
-  if (connum>=0) webSocket.sendTXT(connum,buf);
+  // Broadcast to every locally-connected WebSocket client (port 81), not
+  // just one tracked via connum — that single-client mechanism reset
+  // itself to "nobody" the moment its one client sent any message (e.g.
+  // the /forms page's "Test" command), silently killing all debug output.
+  // Tagged "DBG:" so it's easy to pick out from FORM:/Connected:/status
+  // traffic when watching the raw socket.
+  String tagged = "DBG:" + String(buf);
+  webSocket.broadcastTXT(tagged.c_str());
 }
 
 String hourmin(int timehour)
@@ -471,6 +490,7 @@ void sendToAll(const char *msg, int isServer)
   if (!strncmp(lastmsgsent,msg,199)){
     if (nowmillis-lastmsgsentat<1000  )
     {
+      debugdata(String("SENDTOALL: suppressed duplicate within 1s: '" + String(msg) + "'").c_str());
       return;
     }
   }
@@ -481,6 +501,8 @@ void sendToAll(const char *msg, int isServer)
     s = ID + "=" + String(msg);
   else
     s = String(msg);
+
+  debugdata(String("SENDTOALL: amServer=" + String(amServer ? 1 : 0) + " msg='" + s + "'").c_str());
 
   if (amServer)
   {
@@ -798,6 +820,7 @@ void webSocketEventClient(WStype_t type, uint8_t *payload, size_t length)
   switch (type)
   {
   case WStype_DISCONNECTED:
+    debugdata(String("Uplink WebSocket DISCONNECTED (reconnect count now " + String(wscdisconnect + 1) + ")").c_str());
     lst_wscon=0;
     if (isConnected())
       wscdisconnect++;
@@ -808,6 +831,7 @@ void webSocketEventClient(WStype_t type, uint8_t *payload, size_t length)
     break;
   case WStype_CONNECTED:
   {
+    debugdata("Uplink WebSocket CONNECTED");
     lst_wscon= millis();
     wscdisconnect = 0;
     disconnectcount = 0;
@@ -980,6 +1004,114 @@ void setup_AP(bool forceRestart)
   dbgPrintln(1, "Initialized AP as IP '" + apIP.toString() + "' SSID " + apSsid);
 }
 
+// ==========================================
+// Uplink (device -> central server) connect/reconnect
+// ==========================================
+// Single place that (re)establishes the uplink, whether that's a mesh-peer
+// gateway (plain WebSocket to WiFi.gatewayIP():81) or the configured
+// external server via myConfig.myServer/myPort — as WebSocket or Socket.IO
+// depending on myConfig.socketio. Called once when STA first gets an IP,
+// and again periodically by uplinkHealthCheck() below whenever the link is
+// found to be down, matching the legacy firmware's reconnectServer().
+void connectUplink()
+{
+  if (WiFi.SSID().startsWith(MESHNETWORK) || WiFi.SSID().startsWith("NETSOL") || WiFi.SSID().startsWith("NOW_"))
+  {
+    debugdata(String("Uplink: connecting to mesh gateway " + WiFi.gatewayIP().toString() + ":81").c_str());
+    if (webSocketClient.isConnected()) webSocketClient.disconnect();
+    webSocketClient.begin(WiFi.gatewayIP(), 81, "/");
+    webSocketClient.onEvent(webSocketEventClient);
+    webSocketClient.setReconnectInterval(2000);
+    webSocketClient.enableHeartbeat(3000, 3000, 2);
+    return;
+  }
+
+  if (strlen(myConfig.myServer) == 0)
+  {
+    debugdata("Uplink: myServer is empty - nothing to connect to");
+    return;
+  }
+
+  if (myConfig.socketio)
+  {
+    webSocketIo.close();
+    socketIoPath = "/socket.io/?asccode=" + String(myConfig.asccode) + "&d=0&type=1&EIO=3";
+    debugdata(String("Uplink: connecting SocketIO to " + String(myConfig.myServer) + ":" + String(myConfig.myPort) + socketIoPath).c_str());
+    webSocketIo.begin(myConfig.myServer, myConfig.myPort, socketIoPath, "");
+    webSocketIo.onEvent(socketIOEvent);
+  }
+  else
+  {
+    debugdata(String("Uplink: connecting WebSocket to " + String(myConfig.myServer) + ":" + String(myConfig.myPort)).c_str());
+    if (webSocketClient.isConnected()) webSocketClient.disconnect();
+    webSocketClient.begin(myConfig.myServer, myConfig.myPort, "/", "");
+    webSocketClient.onEvent(webSocketEventClient);
+    webSocketClient.setReconnectInterval(2000);
+    webSocketClient.enableHeartbeat(3000, 3000, 2);
+  }
+}
+
+void socketIOEvent(socketIOmessageType_t type, uint8_t *payload, size_t length)
+{
+  switch (type)
+  {
+    case sIOtype_DISCONNECT:
+      if (!socketconnectedio) { lst_con = millis(); return; }
+      socketconnectedio = false;
+      lst_con = millis();
+      debugdata("Uplink SocketIO DISCONNECTED");
+      break;
+    case sIOtype_CONNECT:
+      socketconnectedio = true;
+      lst_con = millis();
+      debugdata("Uplink SocketIO CONNECTED");
+      webSocketIo.send(sIOtype_CONNECT, "/");   // join default namespace - required, no auto-join in Socket.IO v3+
+      break;
+    default:
+      break;
+  }
+}
+
+// Periodic (called from myrun()) — verifies the uplink is actually up,
+// retries via connectUplink() every 3rd failed check, re-pushes current
+// status once a reconnect succeeds, and restarts the device if the link
+// has been down for a very long time — matching the legacy firmware's
+// dcount/webSocketNotConnected/reconnectServer() health-check loop.
+void uplinkHealthCheck()
+{
+  if (ethercon == 1) return;                 // Ethernet route doesn't use this WiFi uplink
+  if (WiFi.status() != WL_CONNECTED) return;  // STA not even joined yet - nothing to check
+
+  bool isMeshPeer = WiFi.SSID().startsWith(MESHNETWORK) || WiFi.SSID().startsWith("NETSOL") || WiFi.SSID().startsWith("NOW_");
+  if (!isMeshPeer && strlen(myConfig.myServer) == 0) return;   // nothing configured to connect to
+
+  bool up = (myConfig.socketio && !isMeshPeer) ? webSocketIo.isConnected() : webSocketClient.isConnected();
+
+  if (up)
+  {
+    if (uplinkFailCount > 0)
+    {
+      debugdata("Uplink: reconnected - resending current status");
+      resendCurrentStatus();
+    }
+    uplinkFailCount = 0;
+    return;
+  }
+
+  uplinkFailCount++;
+  debugdata(String("Uplink: DOWN (fail count " + String(uplinkFailCount) + ")").c_str());
+  if (uplinkFailCount % 3 == 0)
+  {
+    connectUplink();
+  }
+  if (uplinkFailCount > 12 && millis() > 120000)
+  {
+    debugdata("Uplink: down too long - restarting device");
+    delay(100);
+    ESP.restart();
+  }
+}
+
 WiFiEventHandler gotIpEventHandler, disconnectedEventHandler, SoftAPModeStationDisconnected, SoftAPModeStationConnected;
 
 byte ssidconnected=0;
@@ -997,8 +1129,10 @@ void connectWiFiEvents()
                                               {
                                                 IPAddress ipipad;
                                                 ipipad = WiFi.localIP();
+                                                debugdata(String("STA got IP " + ipipad.toString() + " on SSID '" + WiFi.SSID() + "'").c_str());
                                                 if (ipipad[0] <= 0)
                                                 {
+                                                  debugdata("STA IP invalid (0.x.x.x) - disconnecting and retrying");
                                                   WiFi.disconnect();
                                                   return;
                                                 }
@@ -1018,38 +1152,18 @@ void connectWiFiEvents()
                                                 }
                                                 amServer = AmServer();
                                                 setup_AP(true);   // re-evaluate AP subnet now that STA is bridged (SSID unchanged)
-                                                if (WiFi.SSID().startsWith(MESHNETWORK) || WiFi.SSID().startsWith("NETSOL") || WiFi.SSID().startsWith("NOW_")  )
-                                                {
-                                                  if (WiFi.SSID().startsWith("NETSOL") || WiFi.SSID().startsWith("NOW_") )
-                                                    netsoltime = nowmillis;
-                                                  else
-                                                    netsoltime = 0;
-                                                  if (webSocketClient.isConnected()) webSocketClient.disconnect();
-                                                  webSocketClient.begin(WiFi.gatewayIP(), 81, "/");
-                                                  webSocketClient.onEvent(webSocketEventClient);
-                                                  webSocketClient.setReconnectInterval(2000);
-                                                  webSocketClient.enableHeartbeat(3000, 3000, 2);
-                                                }
+                                                if (WiFi.SSID().startsWith("NETSOL") || WiFi.SSID().startsWith("NOW_") )
+                                                  netsoltime = nowmillis;
                                                 else
-                                                {
+                                                  netsoltime = 0;
 #ifndef MQTTNOTREQUIRED
-                                                  if (amServer==1){
-                                                    client.setServer("www.ask4token.com", 1883);
-                                                    client.setCallback(callback);
-                                                  }
-#endif
-#ifdef NURSECALLNEW
-if (!myConfig.socketio){
-                                                  if (strlen(myConfig.myServer) > 0 && isConnected())
-                                                  {
-                                                    webSocketClient.begin(myConfig.myServer, myConfig.myPort, "/","");
-                                                    webSocketClient.onEvent(webSocketEventClient);
-                                                    webSocketClient.setReconnectInterval(2000);
-                                                    webSocketClient.enableHeartbeat(3000, 3000, 2);
-                                                  }
-}
-#endif
+                                                if (amServer==1 && !(WiFi.SSID().startsWith(MESHNETWORK) || WiFi.SSID().startsWith("NETSOL") || WiFi.SSID().startsWith("NOW_"))){
+                                                  client.setServer("www.ask4token.com", 1883);
+                                                  client.setCallback(callback);
                                                 }
+#endif
+                                                uplinkFailCount = 0;
+                                                connectUplink();
                                               });
 
   disconnectedEventHandler = WiFi.onStationModeDisconnected([](const WiFiEventStationModeDisconnected &event)
@@ -1201,7 +1315,7 @@ body{font-family:sans-serif;margin:0;padding:16px;background:#f4f4f4;color:#222}
 h2{margin-top:0}
 .field{margin-bottom:12px}
 label{display:block;font-weight:bold;margin-bottom:4px;font-size:14px}
-input,select{width:100%;padding:8px;box-sizing:border-box;font-size:16px}
+input,select,textarea{width:100%;padding:8px;box-sizing:border-box;font-size:16px}
 button{padding:10px 16px;font-size:15px;margin:4px 6px 4px 0;cursor:pointer}
 #menu button{display:block;width:100%;text-align:left;margin-bottom:6px}
 #status{color:#666;font-size:13px;margin-bottom:14px}
@@ -1283,10 +1397,13 @@ function renderForm(msg) {
     } else if (f.label === "Debug") {
       input = document.createElement("textarea");
       input.readOnly = true;
-      input.rows = 8;
+      input.rows = 10;
+      input.style.width = "100%";
+      input.style.boxSizing = "border-box";
       input.style.fontFamily = "monospace";
       input.style.fontSize = "13px";
-      input.value = f.value.split(" | ").join("\n");
+      input.style.whiteSpace = "pre-wrap";
+      input.value = f.value;
     } else {
       input = document.createElement("input");
       input.type = "text";
@@ -1445,8 +1562,10 @@ void myrun()
   parse_out_loop();
   webSocket.loop();
 
-  if (isConnected())
+  if (isConnected()) {
     webSocketClient.loop();
+    webSocketIo.loop();
+  }
 
 #ifndef MQTTNOTREQUIRED
   if (amServer==1)
@@ -1480,6 +1599,8 @@ void myrun()
     {
       setup_AP(true);
     }
+
+    uplinkHealthCheck();
 
     counter++;
     last_10sec = t;
