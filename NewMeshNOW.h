@@ -764,11 +764,20 @@ void decodeString1(const char *msm, int isServer)
   }
   else if (!strncmp(msm,"Reboot",7))
   {
-    ESPrestart();
+    // Unauthenticated by construction: any locally-connected WebSocket
+    // client (isServer==1, no address-prefix check at all) or any
+    // mesh-addressed sender who knows this device's ID can trigger this
+    // with nothing more than the literal string "Reboot"/"Reset" — Allow
+    // Reboot (Form 11) is the only lock on it. Form 0's own Reboot/Factory
+    // Reset menu selections are NOT gated here — those are the deliberate
+    // settings-UI action, always available.
+    if (myConfig.allowReboot) ESPrestart();
+    else debugdata("Reboot command received but Allow Reboot is Off - ignored");
   }
   else if (!strncmp(msm,"Reset",6))
   {
-    ESPrestart();
+    if (myConfig.allowReboot) ESPrestart();
+    else debugdata("Reset command received but Allow Reboot is Off - ignored");
   }
   else if (!strncmp(msm,"Test",5))
   {
@@ -1078,9 +1087,18 @@ void uplinkHealthCheck()
   }
   if (uplinkFailCount > 12 && millis() > 120000)
   {
-    debugdata("Uplink: down too long - restarting device");
-    delay(100);
-    ESP.restart();
+    // Self-healing auto-restart, still gated by Allow Reboot (Form 11) —
+    // without it, a facility that's deliberately disabled all reboot
+    // vectors would otherwise still get bounced by this one. Without the
+    // restart, connectUplink() above (every 3rd failed check) keeps trying
+    // indefinitely instead.
+    if (myConfig.allowReboot) {
+      debugdata("Uplink: down too long - restarting device");
+      delay(100);
+      ESP.restart();
+    } else {
+      debugdata("Uplink: down too long but Allow Reboot is Off - not restarting, will keep retrying");
+    }
   }
 }
 
@@ -1460,13 +1478,28 @@ void startconnection()
 
   addAP("test_ms", "netsol@123MS");
 
-  if (String(myConfig.mySSID).length() > 3 && String(myConfig.myPass).length() > 3 && ethercon==0)
+  // Gated on myConfig.networkType (known at boot from configLoad()), NOT
+  // `ethercon` — ethercon is only ever set by TransportEthernet::begin(),
+  // which runs AFTER this (see ESP8266_Newmesh.ino's setup(): startconnection()
+  // via LocalAccessStack::begin() happens before g_statusUplink->begin()).
+  // Checking ethercon==0 here was always true at this point regardless of
+  // route, so an Ethernet-configured unit would still scan/attempt to join
+  // mySSID (and the mesh-peer APs below) for no reason — this is what made
+  // leaving mySSID/myPass with old or placeholder ("0000") values on an
+  // Ethernet unit actually attempt a pointless WiFi join. Selecting
+  // Ethernet as Network Type (Form 1) now skips all of that outright,
+  // regardless of what's in mySSID/myPass.
+  bool wifiNetworkSelected = (myConfig.networkType != (uint8_t)NetworkType::ETHERNET);
+
+  if (wifiNetworkSelected && String(myConfig.mySSID).length() > 3 && String(myConfig.myPass).length() > 3)
     addAP(myConfig.mySSID, myConfig.myPass);
 
-  if (myConfig.machineid>0)
-    addAP(String(MESHNETWORK+String(myConfig.asccode)+String(myConfig.machineid-1)).c_str(), "MESHPASSWORD");
-  if (myConfig.machineid>1)
-    addAP(String(MESHNETWORK+String(myConfig.asccode)+String(myConfig.machineid-2)).c_str(), "MESHPASSWORD");
+  if (wifiNetworkSelected) {
+    if (myConfig.machineid>0)
+      addAP(String(MESHNETWORK+String(myConfig.asccode)+String(myConfig.machineid-1)).c_str(), "MESHPASSWORD");
+    if (myConfig.machineid>1)
+      addAP(String(MESHNETWORK+String(myConfig.asccode)+String(myConfig.machineid-2)).c_str(), "MESHPASSWORD");
+  }
 
   addAP("homeauto", "HA@123home");
   addAP("test_ms10", "netsol@123MS");
@@ -1483,8 +1516,16 @@ void startconnection()
             });
   server.on("/reboot", []()
             {
-              server.send(200, "text/html", "OK");
-              ESPrestart();
+              // Plain unauthenticated GET — anyone who can reach this
+              // device's webserver (same port as /forms) could otherwise
+              // reboot it at will. Allow Reboot (Form 11) is the only lock;
+              // Form 0's own Reboot/Factory Reset menu is unaffected.
+              if (myConfig.allowReboot) {
+                server.send(200, "text/html", "OK");
+                ESPrestart();
+              } else {
+                server.send(200, "text/html", "Allow Reboot is Off - ignored");
+              }
             });
   server.on("/send", []()
             {

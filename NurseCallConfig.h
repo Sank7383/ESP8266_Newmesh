@@ -16,6 +16,21 @@
 
 enum class RouteType : uint8_t { MESH_WIFI = 0, RS485 = 1, ETHERNET = 2 };
 
+// Which physical network interface this device's IP layer rides on —
+// deliberately SEPARATE from RouteType (which is about how CALL STATUS
+// gets reported: mesh-WiFi/RS485/Ethernet). networkType instead governs
+// two things regardless of route: (1) whether WiFi-STA even attempts to
+// join myConfig.mySSID/the mesh-peer APs at boot (skipped entirely for
+// ETHERNET — see startconnection() in NewMeshNOW.h), and (2) which
+// interface myConfig.myIP/myGateway/myNetmask apply to (WiFi via
+// gotIpEventHandler when STA connects to mySSID specifically; Ethernet via
+// TransportEthernet::begin()) — the other interface always falls back to
+// DHCP, unaffected by this setting. NOTE: ETHERNET here only actually
+// brings up hardware if RouteType (Form 11) is ALSO Ethernet — this field
+// does not create Ethernet connectivity by itself, it only stops WiFi from
+// getting in the way of it.
+enum class NetworkType : uint8_t { WIFI = 0, ETHERNET = 1 };
+
 enum class ButtonVariant : uint8_t {
   NONE = 0,             // door indicator, no buttons
   SHIFTREG_5BTN = 1,    // 74HC165, full 5-button + palm
@@ -193,6 +208,8 @@ struct DeviceConfig {
   // in DeviceProtocol.cpp's Form 2 parser. See the .ino's loop() for where
   // this drives the actual resend.
   uint32_t          statusReportIntervalSec;
+  // See NetworkType above — Form 1, independent of routeType.
+  uint8_t           networkType;
 };
 
 extern DeviceConfig myConfig;

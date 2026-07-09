@@ -116,11 +116,12 @@ void sendFormData(int formno) {
     msg = "FORM:1$DONE$Network Settings";
     appendText(msg, "SSID", myConfig.mySSID);
     appendText(msg, "Password", myConfig.myPass);
-    appendText(msg, "Company Code (asccode)", String(myConfig.asccode));
-    appendText(msg, "Device ID", String(myConfig.machineid));
-    appendDropdown(msg, "Uplink Protocol", "WebSocket:0#SocketIO:1", myConfig.socketio ? 1 : 0);
-    appendText(msg, "Server Host", myConfig.myServer);
-    appendText(msg, "Server Port", String(myConfig.myPort));
+    // Which interface myIP/myGateway/myNetmask below apply to, and whether
+    // WiFi-STA even attempts mySSID at all — see NetworkType in
+    // NurseCallConfig.h. Selecting Ethernet here means SSID/Password are
+    // simply ignored (no need to fill them with a placeholder just to
+    // "complete" the form) — WiFi-STA join is skipped entirely at boot.
+    appendDropdown(msg, "Network Type", "WiFi:0#Ethernet:1", myConfig.networkType);
     appendText(msg, "Static IP (blank = DHCP)", myConfig.myIP);
     appendText(msg, "Gateway", myConfig.myGateway);
     appendText(msg, "Subnet Mask", myConfig.myNetmask);
@@ -128,10 +129,12 @@ void sendFormData(int formno) {
   else if (formno == 2) {
     msg = "FORM:2$DONE$Device Settings";
     appendText(msg, "Device Name", myConfig.myDeviceName);
+    appendText(msg, "Company Code (asccode)", String(myConfig.asccode));
     appendText(msg, "Toilet ID", String(myConfig.toiletid));
     appendText(msg, "Door Indicator ID", String(myConfig.doorIndicatorId));
-    appendDropdown(msg, "Allow Reboot", "No:0#Yes:1", myConfig.allowReboot ? 1 : 0);
-    appendText(msg, "Status Report Interval Sec (multiple of 10, min 10)", String(myConfig.statusReportIntervalSec));
+    appendText(msg, "Server IP", myConfig.myServer);
+    appendText(msg, "Server Port", String(myConfig.myPort));
+    appendDropdown(msg, "Server Type", "WebSocket:0#SocketIO:1", myConfig.socketio ? 1 : 0);
   }
   else if (formno == 3) {
     msg = "FORM:3$DONE$LED Settings";
@@ -157,6 +160,12 @@ void sendFormData(int formno) {
     appendText(msg, "Tx Time", String(myConfig.txTime));
     appendDropdown(msg, "Mesh Enabled", "No:0#Yes:1", myConfig.mesh_en ? 1 : 0);
     appendText(msg, "Retransmit", String(myConfig.retransmit));
+    // Device ID (machineid) lives here rather than Device Settings — it's
+    // this device's own mesh/node-addressing number (used in "j<id>,<state>"
+    // reports, AP naming, and mesh-peer addressing), the same family as
+    // Node ID/Mesh ID above.
+    appendText(msg, "Device ID", String(myConfig.machineid));
+    appendText(msg, "Status Report Interval Sec (multiple of 10, min 10)", String(myConfig.statusReportIntervalSec));
   }
   else if (formno == 7) {
     char status[400];
@@ -167,6 +176,14 @@ void sendFormData(int formno) {
     msg = "FORM:11$DONE$Device Role and Route";
     appendDropdown(msg, "Device Role", "Bed:0#Toilet:1#DoorIndicator:2#Combo:3", myConfig.deviceRole);
     appendDropdown(msg, "Route Type", "MeshWiFi:0#RS485:1#Ethernet:2", myConfig.routeType);
+    // General device-behavior toggle, not specific to network/LED/RS485/
+    // mesh — grouped here with Role/Route instead. Now actually enforced
+    // (see NewMeshNOW.h): gates the unauthenticated/automatic reboot
+    // triggers (remote "Reboot"/"Reset" mesh commands, the /reboot HTTP
+    // endpoint, and the persistent-uplink-failure auto-restart) — NOT the
+    // Reboot/Factory Reset menu options on Form 0, which stay always
+    // available as the deliberate settings-UI action.
+    appendDropdown(msg, "Allow Reboot", "No:0#Yes:1", myConfig.allowReboot ? 1 : 0);
   }
   else if (formno == 12) {
     msg = "FORM:12$DONE$Button Configuration";
@@ -276,26 +293,19 @@ void getFormData(const char *formdata1, int socketnumber) {
       else if (formid == 1) {
         if (argk == 0) copyString(myConfig.mySSID, argv, sizeof(myConfig.mySSID));
         else if (argk == 1) copyString(myConfig.myPass, argv, sizeof(myConfig.myPass));
-        else if (argk == 2) myConfig.asccode = argv.toInt();
-        else if (argk == 3) myConfig.machineid = argv.toInt();
-        else if (argk == 4) myConfig.socketio = (clampEnum(argv.toInt(), 1) == 1);
-        else if (argk == 5) copyString(myConfig.myServer, argv, sizeof(myConfig.myServer));
-        else if (argk == 6) myConfig.myPort = argv.toInt();
-        else if (argk == 7) copyString(myConfig.myIP, argv, sizeof(myConfig.myIP));
-        else if (argk == 8) copyString(myConfig.myGateway, argv, sizeof(myConfig.myGateway));
-        else if (argk == 9) copyString(myConfig.myNetmask, argv, sizeof(myConfig.myNetmask));
+        else if (argk == 2) myConfig.networkType = clampEnum(argv.toInt(), 1);
+        else if (argk == 3) copyString(myConfig.myIP, argv, sizeof(myConfig.myIP));
+        else if (argk == 4) copyString(myConfig.myGateway, argv, sizeof(myConfig.myGateway));
+        else if (argk == 5) copyString(myConfig.myNetmask, argv, sizeof(myConfig.myNetmask));
       }
       else if (formid == 2) {
         if (argk == 0) copyString(myConfig.myDeviceName, argv, sizeof(myConfig.myDeviceName));
-        else if (argk == 1) myConfig.toiletid = argv.toInt();
-        else if (argk == 2) myConfig.doorIndicatorId = (uint32_t)argv.toInt();
-        else if (argk == 3) myConfig.allowReboot = (clampEnum(argv.toInt(), 1) == 1);
-        else if (argk == 4) {
-          long secs = argv.toInt();
-          if (secs < 10) secs = 10;
-          secs = ((secs + 5) / 10) * 10;   // round to nearest multiple of 10
-          myConfig.statusReportIntervalSec = (uint32_t)secs;
-        }
+        else if (argk == 1) myConfig.asccode = argv.toInt();
+        else if (argk == 2) myConfig.toiletid = argv.toInt();
+        else if (argk == 3) myConfig.doorIndicatorId = (uint32_t)argv.toInt();
+        else if (argk == 4) copyString(myConfig.myServer, argv, sizeof(myConfig.myServer));
+        else if (argk == 5) myConfig.myPort = argv.toInt();
+        else if (argk == 6) myConfig.socketio = (clampEnum(argv.toInt(), 1) == 1);
       }
       else if (formid == 3) {
         if (argk == 0) {
@@ -334,10 +344,18 @@ void getFormData(const char *formdata1, int socketnumber) {
         else if (argk == 3) myConfig.txTime = (uint16_t)constrain(argv.toInt(), 2000, 65000);
         else if (argk == 4) myConfig.mesh_en = (clampEnum(argv.toInt(), 1) == 1);
         else if (argk == 5) myConfig.retransmit = (uint8_t)argv.toInt();
+        else if (argk == 6) myConfig.machineid = argv.toInt();
+        else if (argk == 7) {
+          long secs = argv.toInt();
+          if (secs < 10) secs = 10;
+          secs = ((secs + 5) / 10) * 10;   // round to nearest multiple of 10
+          myConfig.statusReportIntervalSec = (uint32_t)secs;
+        }
       }
       else if (formid == 11) {
         if (argk == 0) myConfig.deviceRole = clampEnum(argv.toInt(), 3);
         else if (argk == 1) myConfig.routeType = clampEnum(argv.toInt(), 2);
+        else if (argk == 2) myConfig.allowReboot = (clampEnum(argv.toInt(), 1) == 1);
       }
       else if (formid == 12) {
         if (argk == 0) myConfig.buttonVariant = clampEnum(argv.toInt(), 4);

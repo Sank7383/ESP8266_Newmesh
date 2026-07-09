@@ -56,28 +56,30 @@ Every field below is listed with: the form/page it's on, its `argk` index (the p
 ### Form 0 — Root menu
 Not a data form — a `$R|` selector routing to every other form: `Network:1 Device:2 LED:3 RS485:4 Mesh:5 Info:7 Role and Route:11 Buttons:12 Ruleset:13 Debug:14 Reboot:20 Factory Reset:21`. Selecting `20` calls `ESPrestart()` immediately; selecting `21` calls `configApplyDefaults()` + `configSave()` + `ESPrestart()` (full factory reset).
 
+**Forms 1/2/5/11 were reorganized** (previously Form 1 held SSID/Password/asccode/Device ID/Uplink Protocol/Server Host/Port/IP/Gateway/Netmask all together, and Form 2 held Allow Reboot/Status Report Interval). Fields now group by what they actually configure — network transport, device/server identity, mesh/timing, and device-behavior/role — rather than everything network-adjacent piling onto one page. **This renumbers `argk` on Forms 1 and 2** — any companion app hardcoding those positions needs updating; the `/forms` browser UI is unaffected since it renders whatever the device sends.
+
 ### Form 1 — Network Settings
 | argk | Field | Config path | Effect |
 |---|---|---|---|
-| 0 | SSID | `myConfig.mySSID` | Upstream WiFi network this device's STA radio tries to join. Empty = device stays AP-only, never attempts an uplink. |
-| 1 | Password | `myConfig.myPass` | Password for the above SSID. |
-| 2 | Company Code (asccode) | `myConfig.asccode` | Site/company identifier. Used in the AP SSID (`NETE<asccode><machineid>` / `MESH<asccode><machineid>`), in Socket.IO payloads, and in the Mesh ID scheme. |
-| 3 | Device ID | `myConfig.machineid` | This device's numeric identity. Used in the AP SSID, as the `rid` in status messages sent to the server, and as the RS485 bus address. |
-| 4 | Uplink Protocol | `myConfig.socketio` (bool, 0/1) | `0`=WebSocket, `1`=Socket.IO. Selects which client (`webSocketClient` vs `webSocketIo`) and which wire format (`"s<id>,<state>,<doorid>"` vs a JSON `update_status` event) is used to report status — see §7. |
-| 5 | Server Host | `myConfig.myServer` | Central server address for the uplink. **Must be non-empty** or the uplink never attempts to connect at all (this was previously bugged with an arbitrary 11–19 character length requirement — fixed, now just requires non-empty). |
-| 6 | Server Port | `myConfig.myPort` | Port for the above. |
-| 7 | Static IP (blank = DHCP) | `myConfig.myIP` | Applied via `WiFi.config()` once STA connects to `mySSID` specifically (`NewMeshNOW.h`'s `gotIpEventHandler`). |
-| 8 | Gateway | `myConfig.myGateway` | Paired with the static IP above. |
-| 9 | Subnet Mask | `myConfig.myNetmask` | Paired with the static IP above. |
+| 0 | SSID | `myConfig.mySSID` | Upstream WiFi network this device's STA radio tries to join. Empty = device stays AP-only, never attempts an uplink. **Ignored entirely when Network Type (below) is Ethernet** — no need to fill it with a placeholder. |
+| 1 | Password | `myConfig.myPass` | Password for the above SSID. Same Ethernet exemption as SSID. |
+| 2 | Network Type | `myConfig.networkType` (`NetworkType` enum, `NurseCallConfig.h`) | `WiFi:0` (default) or `Ethernet:1`. Deliberately independent of Route Type (Form 11, §9.1) — this is about which interface the IP fields below apply to and whether WiFi-STA even attempts to join anything at boot, not about which transport reports call status. See §9.1 for the full mechanism and how it fixed a real ordering bug. |
+| 3 | Static IP (blank = DHCP) | `myConfig.myIP` | Applied to WHICHEVER interface Network Type selects: via `WiFi.config()` once STA connects to `mySSID` specifically (`NewMeshNOW.h`'s `gotIpEventHandler`) when WiFi, or via `TransportEthernet::begin()` when Ethernet. The interface NOT selected always falls back to DHCP, unaffected. |
+| 4 | Gateway | `myConfig.myGateway` | Paired with the static IP above. |
+| 5 | Subnet Mask | `myConfig.myNetmask` | Paired with the static IP above. |
 
 ### Form 2 — Device Settings
 | argk | Field | Config path | Effect |
 |---|---|---|---|
 | 0 | Device Name | `myConfig.myDeviceName` | Cosmetic device label. |
-| 1 | Toilet ID | `myConfig.toiletid` | Used to derive `bedToiletShareUnit()` — `true` when `toiletid == 0` **or** `toiletid == machineid` (0 means "no separate toilet unit configured"). Gates both the call-legality rule in §6 AND the toilet-call routing/LED-zone behavior in §8/§9 below — a non-zero `toiletid` that differs from this device's own `machineid` means the physical toilet pull-cord wired into this device reports under that OTHER device's identity, not this one's. |
-| 2 | Door Indicator ID | `myConfig.doorIndicatorId` | Sent as the `"doorid"` field in the plain-WebSocket status message format (`"s<id>,<state>,<doorid>"`). |
-| 3 | Allow Reboot | `myConfig.allowReboot` | Stored but **not currently read anywhere** — **GAP**: no code branch checks this flag before allowing a reboot. |
-| 4 | Status Report Interval Sec | `myConfig.statusReportIntervalSec` | Period of the periodic full-status resend (see §6.1). Rounded to the nearest multiple of 10, minimum 10, on save. Defaults to `30`. |
+| 1 | Company Code (asccode) | `myConfig.asccode` | Site/company identifier. Used in the AP SSID (`NETE<asccode><machineid>` / `MESH<asccode><machineid>`), in Socket.IO payloads, and in the Mesh ID scheme. |
+| 2 | Toilet ID | `myConfig.toiletid` | Used to derive `bedToiletShareUnit()` — `true` when `toiletid == 0` **or** `toiletid == machineid` (0 means "no separate toilet unit configured"). Gates both the call-legality rule in §6 AND the toilet-call routing/LED-zone behavior in §8/§9 below — a non-zero `toiletid` that differs from this device's own `machineid` means the physical toilet pull-cord wired into this device reports under that OTHER device's identity, not this one's. |
+| 3 | Door Indicator ID | `myConfig.doorIndicatorId` | Sent as the `"doorid"` field in the plain-WebSocket status message format (`"s<id>,<state>,<doorid>"`). |
+| 4 | Server IP | `myConfig.myServer` | Central server address for the uplink. **Must be non-empty** or the uplink never attempts to connect at all (this was previously bugged with an arbitrary 11–19 character length requirement — fixed, now just requires non-empty). |
+| 5 | Server Port | `myConfig.myPort` | Port for the above. |
+| 6 | Server Type | `myConfig.socketio` (bool, 0/1) | `0`=WebSocket, `1`=Socket.IO. Selects which client (`webSocketClient` vs `webSocketIo`) and which wire format (`"s<id>,<state>,<doorid>"` vs a JSON `update_status` event) is used to report status — see §7. |
+
+Device ID (`machineid`) moved to Form 5 (Mesh Settings, §4 below) — it's this device's mesh/node-addressing number, grouped with Node ID/Mesh ID rather than with server identity here. Allow Reboot moved to Form 11 (§9.1) — see below, now actually enforced. Status Report Interval moved to Form 5.
 
 ### Form 3 — LED Settings
 | argk | Field | Config path | Effect |
@@ -107,6 +109,8 @@ Not a data form — a `$R|` selector routing to every other form: `Network:1 Dev
 | 3 | Tx Time | `myConfig.txTime` | Minimum value clamped to 2000 in `configApplyDefaults`; stored but its only read site is a floor-check in `espnow_setup()` (`MYESPNOW.h`). |
 | 4 | Mesh Enabled | `myConfig.mesh_en` | Gates whether `esp_now_init()` runs at all in `espnow_setup()`. |
 | 5 | Retransmit | `myConfig.retransmit` | Legacy field, minimal current usage. |
+| 6 | Device ID | `myConfig.machineid` | This device's numeric identity — used in the AP SSID, as the `rid` in status messages sent to the server, and as the RS485 bus address. Grouped here with Node ID/Mesh ID (same "this device's own network-identity numbers" family) rather than Device Settings. |
+| 7 | Status Report Interval Sec | `myConfig.statusReportIntervalSec` | Period of the periodic full-status resend (see §6.1). Rounded to the nearest multiple of 10, minimum 10. Defaults to `30`. |
 
 ### Form 7 — Info
 Read-only. One `$T|Status||...|0` field built by `getCurrentStatus1()`: device name, ID, role, route, current reported status code, housekeeping flag, upstream-connected flag, free heap, uptime.
@@ -115,7 +119,8 @@ Read-only. One `$T|Status||...|0` field built by `getCurrentStatus1()`: device n
 | argk | Field | Config path | Effect |
 |---|---|---|---|
 | 0 | Device Role | `myConfig.deviceRole` | `0`=Bed, `1`=Toilet, `2`=DoorIndicator, `3`=Combo. **Critically**: only roles 0/1/3 show this device's own call-color on the LED strip — role 2 (DoorIndicator) shows *only* the aggregate/room-priority color, ignoring this device's own state entirely (see §8). |
-| 1 | Route Type | `myConfig.routeType` | `0`=WiFi mesh, `1`=RS485, `2`=Ethernet. Selects which `ITransport` implementation `TransportFactory::create()` returns at boot (requires reboot to take effect). |
+| 1 | Route Type | `myConfig.routeType` | `0`=WiFi mesh, `1`=RS485, `2`=Ethernet. Selects which `ITransport` implementation `TransportFactory::create()` returns at boot (requires reboot to take effect). **For Ethernet to actually work, Network Type (Form 1) should also be set to Ethernet** — `TransportEthernet` is the only code that ever initializes the ENC28J60 hardware, and Network Type is what stops WiFi-STA from also trying to join something at the same time. The two fields are intentionally independent (not auto-synced) — see §9.1. |
+| 2 | Allow Reboot | `myConfig.allowReboot` | **Now actually enforced** (previously a GAP — see §9.1 for the full list of what this locks). |
 
 ### Form 12 — Button Configuration
 | argk | Field | Config path | Effect |
@@ -255,11 +260,29 @@ This uses its own independent `BlinkController` (`linkBlink_`, 500ms period) so 
 
 **GAP**: the LED data pin is hardcoded to GPIO0 (`#define LED_DATA_PIN 0` in `LedStripController.h`) for every role — FastLED's `addLeds<CHIPSET, PIN, ...>()` binds the pin at compile time, which can't be made runtime-configurable without a different FastLED API. One deprecated door-indicator PCB revision used GPIO13 and is not supported by this unified image.
 
-## 9. Consolidated list of known gaps (searchable)
+## 9. Network Type (Form 1) and reboot safety (Form 11)
+
+### 9.1 Network Type — WiFi vs Ethernet, and the SSID ordering bug it fixed
+`myConfig.networkType` (`NetworkType` enum, `NurseCallConfig.h`) is deliberately a SEPARATE field from `routeType` — it answers "which physical interface is my IP layer on" (governing WiFi-STA-join behavior and which interface the static IP fields apply to), not "which transport reports call status" (that's still `routeType`, Form 11).
+
+**The bug this fixed**: `startconnection()` (`NewMeshNOW.h`) used to gate the WiFi-STA-join attempt on `ethercon==0`. But `ethercon` is only ever set by `TransportEthernet::begin()`, which runs from the `.ino`'s `setup()` AFTER `g_localAccess.begin()` (which is what calls `startconnection()`). So at the point that check ran, `ethercon` was ALWAYS still `0`, regardless of route — an Ethernet-configured unit would still attempt to join `mySSID`/the mesh-peer APs for no reason, as long as `mySSID`/`myPass` were both longer than 3 characters (which is exactly what typing a placeholder like `"0000"` into SSID would trigger). Now gated on `myConfig.networkType != ETHERNET` instead — a value known at boot from `configLoad()`, not a runtime flag that isn't set yet. Selecting Ethernet as Network Type now skips the `mySSID` join AND the two mesh-peer (`machineid-1`/`machineid-2`) join attempts entirely, regardless of what's stored in SSID/Password — no placeholder needed.
+
+Static-IP targeting was already correct before this fix and needed no change: WiFi applies `myIP`/`myGateway`/`myNetmask` via `WiFi.config()` only once STA actually connects to `mySSID` specifically (`gotIpEventHandler`); Ethernet applies the same three fields via `TransportEthernet::begin()`. Whichever interface Network Type doesn't select simply never runs that code path and stays on DHCP.
+
+**Known limitation**: Network Type and Route Type are not auto-synced. Setting Network Type=Ethernet with Route Type left at MeshWiFi/RS485 will correctly stop WiFi from interfering, but won't itself bring up the ENC28J60 — only `TransportFactory::create()` picking `TransportEthernet` (Route Type=Ethernet) does that. For a working Ethernet setup, set both.
+
+### 9.2 Reboot safety — closing the unlocked triggers
+`myConfig.allowReboot` (Form 11) was previously a documented GAP — stored but never checked. It's now the single lock gating every REMOTE/AUTOMATIC reboot trigger found in the codebase:
+- `decodeString2()`'s literal `"Reboot"`/`"Reset"` string commands (`NewMeshNOW.h`) — reachable with **no authentication at all** from any locally-connected WebSocket client (port 81, `isServer==1` skips the address-prefix check entirely by design, see §3), or from a mesh-addressed sender who knows this device's ID.
+- The `/reboot` HTTP endpoint (`NewMeshNOW.h`) — a plain unauthenticated GET, same webserver port as `/forms`.
+- The persistent-uplink-failure auto-restart in `uplinkHealthCheck()` (`NewMeshNOW.h`) — self-healing after 12+ consecutive failed checks past 120s uptime; without `allowReboot`, it now just keeps retrying (`connectUplink()` every 3rd failed check) instead of ever restarting.
+
+**Deliberately NOT gated**: Form 0's menu `Reboot:20` and `Factory Reset:21` selections. Those require deliberately navigating the settings UI and choosing that specific option — the intentional, expected path a technician uses — so they stay always-available regardless of `allowReboot`, matching how Factory Reset already behaved.
+
+## 10. Consolidated list of known gaps (searchable)
 
 - Form 13 field "Ruleset Preset" is stored but never read — no behavioral effect.
 - Form 13's `CustomState`/`CallState::CUSTOM` has no trigger wired to it anywhere — enabling it has no visible effect until something sets `mainState = CallState::CUSTOM`.
-- Form 2 "Allow Reboot" is stored but never checked before a reboot occurs.
 - Form 4 "New 485 Module" and "Legacy Protocol Select" are stored but unused by the current hardware-UART-based `TransportRs485` (they mattered for the legacy SoftwareSerial implementation this replaced).
 - Form 12 slots 2–6 (Toilet/Extra/Blue/Attend/AP) have no effect on Gpio2/Gpio3Remote button variants — only slots 0/1 are read by those drivers, with no UI indication that the other 5 dropdowns are inert for the selected variant.
 - OTA firmware update is a stub (`handleBinUpdate` just logs and returns) — explicitly out of scope, flagged as a valuable fast-follow since one image now covers every variant.
