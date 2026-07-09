@@ -130,6 +130,7 @@ void sendFormData(int formno) {
     msg = "FORM:2$DONE$Device Settings";
     appendText(msg, "Device Name", myConfig.myDeviceName);
     appendText(msg, "Company Code (asccode)", String(myConfig.asccode));
+    appendText(msg, "Device ID", String(myConfig.machineid));
     appendText(msg, "Toilet ID", String(myConfig.toiletid));
     appendText(msg, "Door Indicator ID", String(myConfig.doorIndicatorId));
     appendText(msg, "Server IP", myConfig.myServer);
@@ -160,11 +161,6 @@ void sendFormData(int formno) {
     appendText(msg, "Tx Time", String(myConfig.txTime));
     appendDropdown(msg, "Mesh Enabled", "No:0#Yes:1", myConfig.mesh_en ? 1 : 0);
     appendText(msg, "Retransmit", String(myConfig.retransmit));
-    // Device ID (machineid) lives here rather than Device Settings — it's
-    // this device's own mesh/node-addressing number (used in "j<id>,<state>"
-    // reports, AP naming, and mesh-peer addressing), the same family as
-    // Node ID/Mesh ID above.
-    appendText(msg, "Device ID", String(myConfig.machineid));
     appendText(msg, "Status Report Interval Sec (multiple of 10, min 10)", String(myConfig.statusReportIntervalSec));
   }
   else if (formno == 7) {
@@ -301,11 +297,12 @@ void getFormData(const char *formdata1, int socketnumber) {
       else if (formid == 2) {
         if (argk == 0) copyString(myConfig.myDeviceName, argv, sizeof(myConfig.myDeviceName));
         else if (argk == 1) myConfig.asccode = argv.toInt();
-        else if (argk == 2) myConfig.toiletid = argv.toInt();
-        else if (argk == 3) myConfig.doorIndicatorId = (uint32_t)argv.toInt();
-        else if (argk == 4) copyString(myConfig.myServer, argv, sizeof(myConfig.myServer));
-        else if (argk == 5) myConfig.myPort = argv.toInt();
-        else if (argk == 6) myConfig.socketio = (clampEnum(argv.toInt(), 1) == 1);
+        else if (argk == 2) myConfig.machineid = argv.toInt();
+        else if (argk == 3) myConfig.toiletid = argv.toInt();
+        else if (argk == 4) myConfig.doorIndicatorId = (uint32_t)argv.toInt();
+        else if (argk == 5) copyString(myConfig.myServer, argv, sizeof(myConfig.myServer));
+        else if (argk == 6) myConfig.myPort = argv.toInt();
+        else if (argk == 7) myConfig.socketio = (clampEnum(argv.toInt(), 1) == 1);
       }
       else if (formid == 3) {
         if (argk == 0) {
@@ -344,8 +341,7 @@ void getFormData(const char *formdata1, int socketnumber) {
         else if (argk == 3) myConfig.txTime = (uint16_t)constrain(argv.toInt(), 2000, 65000);
         else if (argk == 4) myConfig.mesh_en = (clampEnum(argv.toInt(), 1) == 1);
         else if (argk == 5) myConfig.retransmit = (uint8_t)argv.toInt();
-        else if (argk == 6) myConfig.machineid = argv.toInt();
-        else if (argk == 7) {
+        else if (argk == 6) {
           long secs = argv.toInt();
           if (secs < 10) secs = 10;
           secs = ((secs + 5) / 10) * 10;   // round to nearest multiple of 10

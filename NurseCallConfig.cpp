@@ -39,11 +39,18 @@ void configApplyDefaults(DeviceConfig &c) {
   strlcpy(c.myServer, "", sizeof(c.myServer));
   c.myPort = 80;
   c.myDeviceIdentification = 'T';
-  c.doorIndicatorId = 0;
+  // machineid/toiletid/doorIndicatorId default to the same placeholder (51)
+  // so a fresh device is immediately self-consistent out of the box:
+  // toiletid==machineid makes bedToiletShareUnit() true by default (no
+  // separate toilet device assumed until configured otherwise), and
+  // doorIndicatorId matching gives a sane non-zero default for the "doorid"
+  // field in outgoing status messages. Every site still reassigns these via
+  // Form 2 for a real deployment.
+  c.doorIndicatorId = 51;
 
   c.asccode = 1;
-  c.machineid = 1;
-  c.toiletid = 0;
+  c.machineid = 51;
+  c.toiletid = 51;
 
   // Defaults to GRB (1), not RGB (0): the vast majority of WS2812/WS2812B
   // strips in the field are natively GRB-ordered — true-RGB-native strips

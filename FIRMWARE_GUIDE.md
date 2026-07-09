@@ -72,14 +72,15 @@ Not a data form — a `$R|` selector routing to every other form: `Network:1 Dev
 | argk | Field | Config path | Effect |
 |---|---|---|---|
 | 0 | Device Name | `myConfig.myDeviceName` | Cosmetic device label. |
-| 1 | Company Code (asccode) | `myConfig.asccode` | Site/company identifier. Used in the AP SSID (`NETE<asccode><machineid>` / `MESH<asccode><machineid>`), in Socket.IO payloads, and in the Mesh ID scheme. |
-| 2 | Toilet ID | `myConfig.toiletid` | Used to derive `bedToiletShareUnit()` — `true` when `toiletid == 0` **or** `toiletid == machineid` (0 means "no separate toilet unit configured"). Gates both the call-legality rule in §6 AND the toilet-call routing/LED-zone behavior in §8/§9 below — a non-zero `toiletid` that differs from this device's own `machineid` means the physical toilet pull-cord wired into this device reports under that OTHER device's identity, not this one's. |
-| 3 | Door Indicator ID | `myConfig.doorIndicatorId` | Sent as the `"doorid"` field in the plain-WebSocket status message format (`"s<id>,<state>,<doorid>"`). |
-| 4 | Server IP | `myConfig.myServer` | Central server address for the uplink. **Must be non-empty** or the uplink never attempts to connect at all (this was previously bugged with an arbitrary 11–19 character length requirement — fixed, now just requires non-empty). |
-| 5 | Server Port | `myConfig.myPort` | Port for the above. |
-| 6 | Server Type | `myConfig.socketio` (bool, 0/1) | `0`=WebSocket, `1`=Socket.IO. Selects which client (`webSocketClient` vs `webSocketIo`) and which wire format (`"s<id>,<state>,<doorid>"` vs a JSON `update_status` event) is used to report status — see §7. |
+| 1 | Company Code (asccode) | `myConfig.asccode` | Site/company identifier. Used in the AP SSID (`NETE<asccode><machineid>` / `MESH<asccode><machineid>`), in Socket.IO payloads, and in the Mesh ID scheme. Defaults to `1`. |
+| 2 | Device ID | `myConfig.machineid` | This device's numeric identity. Used in the AP SSID, as the `rid` in status messages sent to the server, and as the RS485 bus address. Defaults to `51`. |
+| 3 | Toilet ID | `myConfig.toiletid` | Used to derive `bedToiletShareUnit()` — `true` when `toiletid == 0` **or** `toiletid == machineid` (0 means "no separate toilet unit configured"). Gates both the call-legality rule in §6 AND the toilet-call routing/LED-zone behavior in §8/§9 below — a non-zero `toiletid` that differs from this device's own `machineid` means the physical toilet pull-cord wired into this device reports under that OTHER device's identity, not this one's. **Defaults to `51`, matching Device ID's default** — so a freshly-flashed device is self-consistent out of the box (`bedToiletShareUnit()` true, no separate toilet assumed until reconfigured). |
+| 4 | Door Indicator ID | `myConfig.doorIndicatorId` | Sent as the `"doorid"` field in the plain-WebSocket status message format (`"s<id>,<state>,<doorid>"`). Defaults to `51`. |
+| 5 | Server IP | `myConfig.myServer` | Central server address for the uplink. **Must be non-empty** or the uplink never attempts to connect at all (this was previously bugged with an arbitrary 11–19 character length requirement — fixed, now just requires non-empty). |
+| 6 | Server Port | `myConfig.myPort` | Port for the above. |
+| 7 | Server Type | `myConfig.socketio` (bool, 0/1) | `0`=WebSocket, `1`=Socket.IO. Selects which client (`webSocketClient` vs `webSocketIo`) and which wire format (`"s<id>,<state>,<doorid>"` vs a JSON `update_status` event) is used to report status — see §7. |
 
-Device ID (`machineid`) moved to Form 5 (Mesh Settings, §4 below) — it's this device's mesh/node-addressing number, grouped with Node ID/Mesh ID rather than with server identity here. Allow Reboot moved to Form 11 (§9.1) — see below, now actually enforced. Status Report Interval moved to Form 5.
+Allow Reboot moved to Form 11 (§9.2) — now actually enforced. Status Report Interval lives on Form 5 (Mesh Settings, below) alongside the other mesh/timing fields. Device ID moved back here (after Company Code) from Form 5 per a later revision — it's device/server identity, grouped with Company Code/Toilet ID/Door ID rather than mesh timing.
 
 ### Form 3 — LED Settings
 | argk | Field | Config path | Effect |
@@ -109,8 +110,9 @@ Device ID (`machineid`) moved to Form 5 (Mesh Settings, §4 below) — it's this
 | 3 | Tx Time | `myConfig.txTime` | Minimum value clamped to 2000 in `configApplyDefaults`; stored but its only read site is a floor-check in `espnow_setup()` (`MYESPNOW.h`). |
 | 4 | Mesh Enabled | `myConfig.mesh_en` | Gates whether `esp_now_init()` runs at all in `espnow_setup()`. |
 | 5 | Retransmit | `myConfig.retransmit` | Legacy field, minimal current usage. |
-| 6 | Device ID | `myConfig.machineid` | This device's numeric identity — used in the AP SSID, as the `rid` in status messages sent to the server, and as the RS485 bus address. Grouped here with Node ID/Mesh ID (same "this device's own network-identity numbers" family) rather than Device Settings. |
-| 7 | Status Report Interval Sec | `myConfig.statusReportIntervalSec` | Period of the periodic full-status resend (see §6.1). Rounded to the nearest multiple of 10, minimum 10. Defaults to `30`. |
+| 6 | Status Report Interval Sec | `myConfig.statusReportIntervalSec` | Period of the periodic full-status resend (see §6.1). Rounded to the nearest multiple of 10, minimum 10. Defaults to `30`. |
+
+(Device ID/`machineid` is on Form 2, Device Settings, not here — see above.)
 
 ### Form 7 — Info
 Read-only. One `$T|Status||...|0` field built by `getCurrentStatus1()`: device name, ID, role, route, current reported status code, housekeeping flag, upstream-connected flag, free heap, uptime.
