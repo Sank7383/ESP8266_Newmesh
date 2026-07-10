@@ -1060,8 +1060,13 @@ void socketIOEvent(socketIOmessageType_t type, uint8_t *payload, size_t length)
 // dcount/webSocketNotConnected/reconnectServer() health-check loop.
 void uplinkHealthCheck()
 {
-  if (ethercon == 1) return;                 // Ethernet route doesn't use this WiFi uplink
-  if (WiFi.status() != WL_CONNECTED) return;  // STA not even joined yet - nothing to check
+  // Was previously "if (ethercon==1) return" — WRONG: Ethernet uses the
+  // exact same webSocketClient/webSocketIo uplink as WiFi (see
+  // TransportEthernet::begin()'s connectUplink() call), it just gets there
+  // over a different physical interface. Skipping the check for Ethernet
+  // meant a dropped uplink on that route would never reconnect. isConnected()
+  // covers both: true for ethercon==1 OR WiFi actually associated.
+  if (!isConnected()) return;   // neither interface has an IP yet - nothing to check
 
   bool isMeshPeer = WiFi.SSID().startsWith(MESHNETWORK) || WiFi.SSID().startsWith("NETSOL") || WiFi.SSID().startsWith("NOW_");
   if (!isMeshPeer && strlen(myConfig.myServer) == 0) return;   // nothing configured to connect to

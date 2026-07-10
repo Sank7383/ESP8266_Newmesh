@@ -33,6 +33,11 @@ bool AmServer();
 bool isConnected();
 void setup_AP(bool forceRestart = false);
 void startconnection();
+// Opens the WebSocket/Socket.IO connection to myConfig.myServer (or a mesh
+// gateway) — called by NewMeshNOW.h's own WiFi gotIP handler for the WiFi
+// route; TransportEthernet::begin() calls it directly for the Ethernet
+// route, since Ethernet has no equivalent WiFi event to piggyback on.
+void connectUplink();
 void myrun();
 void sendToAll(const char *msg, int isServer);
 void sendMeshMessage(uint16_t destId, String payload, uint8_t type = 0, uint8_t ttl = 5);

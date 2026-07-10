@@ -2,6 +2,7 @@
 #include "NurseCallConfig.h"
 #include "MeshNowExports.h"
 #include "DeviceState.h"
+#include "TransportEthernet.h"
 #include <ESP8266WiFi.h>
 #include <string.h>
 #include <ctype.h>
@@ -201,13 +202,15 @@ void sendFormData(int formno) {
     appendText(msg, "Custom State LED Color Index (0-7)", String(myConfig.ruleset.customState.ledColorIndex));
   }
   else if (formno == 14) {
-    // Read-only diagnostics, deliberately ONE compact text blob (not a
-    // page of separate boxes) so it's readable at a glance — everything
-    // read live, nothing cached. Includes the internal uplink/WebSocket
-    // client state (is it even trying to connect, has it ever succeeded,
-    // how many times has it dropped) plus the LED/call-state inputs, so
-    // "not connecting to server" and "LED color not changing" are both
-    // answerable from this one page instead of guessing.
+    // Read-only diagnostics. One Key:Value pair per line — same "readable
+    // at a glance" style as getCurrentStatus1()'s "/" home page (which is
+    // comma-joined then rendered as one line per field via <br>), instead
+    // of the old layout that packed several fields onto one dense line.
+    // Everything here is read live, nothing cached. Includes the internal
+    // uplink/WebSocket client state (is it even trying to connect, has it
+    // ever succeeded, how many times has it dropped) plus the LED/call-
+    // state inputs, so "not connecting to server" and "LED color not
+    // changing" are both answerable from this one page instead of guessing.
     bool staConnected = (WiFi.status() == WL_CONNECTED);
     String uplinkTarget = strlen(myConfig.myServer) > 0
         ? String(myConfig.myServer) + ":" + String(myConfig.myPort) + (myConfig.socketio ? " (SocketIO)" : " (WebSocket)")
@@ -223,29 +226,36 @@ void sendFormData(int formno) {
     // actual line breaks in the Debug textarea.
     const char *SEP = "\n";
     String d;
-    d.reserve(400);
-    d += "WiFi:" + (staConnected ? WiFi.SSID() : String("none")) +
-         (staConnected ? ("(" + String(WiFi.RSSI()) + "dBm)") : "") +
-         " STA:" + WiFi.localIP().toString() + " GW:" + WiFi.gatewayIP().toString() + SEP;
-    d += "AP:" + WiFi.softAPSSID() + "@" + WiFi.softAPIP().toString() +
-         " clients:" + String(WiFi.softAPgetStationNum()) +
-         " role:" + String(isConnected() ? "bridged" : "standalone") + SEP;
-    d += "Uplink target:" + uplinkTarget +
-         " connected:" + String(uplinkUp ? 1 : 0) +
-         " lastOK:" + secsSinceUplinkOk +
-         " failCount:" + String(uplinkFailCount) +
-         " reconnects:" + String(wscdisconnect) + SEP;
-    d += "Route:" + String(myConfig.routeType) + " amServer:" + String(amServer ? 1 : 0) +
-         " eth:" + String(ethercon) + " espnow:" + String(meshLayerActive() ? 1 : 0) + SEP;
-    d += "CallState:" + String((int)g_callStatus.mainState) +
-         " Toilet:" + String(g_callStatus.toiletCallActive ? 1 : 0) +
-         " Housekeeping:" + String(g_callStatus.housekeeping ? 1 : 0) +
-         " Role:" + String(myConfig.deviceRole) +
+    d.reserve(750);
+    d += "WiFi SSID:" + (staConnected ? WiFi.SSID() : String("none")) + SEP;
+    d += "WiFi RSSI:" + (staConnected ? (String(WiFi.RSSI()) + "dBm") : String("n/a")) + SEP;
+    d += "STA IP:" + WiFi.localIP().toString() + SEP;
+    d += "Gateway:" + WiFi.gatewayIP().toString() + SEP;
+    d += "AP SSID:" + WiFi.softAPSSID() + SEP;
+    d += "AP IP:" + WiFi.softAPIP().toString() + SEP;
+    d += "AP Clients:" + String(WiFi.softAPgetStationNum()) + SEP;
+    d += "Bridge Role:" + String(isConnected() ? "bridged" : "standalone") + SEP;
+    d += "Uplink Target:" + uplinkTarget + SEP;
+    d += "Uplink Connected:" + String(uplinkUp ? 1 : 0) + SEP;
+    d += "Uplink Last OK:" + secsSinceUplinkOk + SEP;
+    d += "Uplink Fail Count:" + String(uplinkFailCount) + SEP;
+    d += "Uplink Reconnects:" + String(wscdisconnect) + SEP;
+    d += "Route Type:" + String(myConfig.routeType) + SEP;
+    d += "Am Server:" + String(amServer ? 1 : 0) + SEP;
+    d += "Ethernet Link:" + String(ethercon) + SEP;
+    d += "Ethernet IP:" + ethernetLocalIP().toString() +
+         " (0.0.0.0 = not linked yet/no cable/wrong route/still in ~7s deferred-init window - see TransportEthernet)" + SEP;
+    d += "ESP-NOW Active:" + String(meshLayerActive() ? 1 : 0) + SEP;
+    d += "Call State:" + String((int)g_callStatus.mainState) + SEP;
+    d += "Toilet Call Active:" + String(g_callStatus.toiletCallActive ? 1 : 0) + SEP;
+    d += "Housekeeping:" + String(g_callStatus.housekeeping ? 1 : 0) + SEP;
+    d += "Device Role:" + String(myConfig.deviceRole) +
          " (LED call-color only shows for Role 0/1/3 - Role 2=DoorIndicator only shows aggregate color)" + SEP;
-    d += "LED link status: networkUp:" + String(g_statusUplink->isNetworkUp() ? 1 : 0) +
-         " serverUp:" + String(g_statusUplink->isLinkUp() ? 1 : 0) +
+    d += "LED Network Up:" + String(g_statusUplink->isNetworkUp() ? 1 : 0) + SEP;
+    d += "LED Server Up:" + String(g_statusUplink->isLinkUp() ? 1 : 0) +
          " (networkUp=0 blinks white, serverUp=0 blinks pink - either overrides the call color)" + SEP;
-    d += "Heap:" + String(ESP.getFreeHeap()) + " Up:" + String(millis() / 1000) + "s";
+    d += "Free Heap:" + String(ESP.getFreeHeap()) + SEP;
+    d += "Uptime:" + String(millis() / 1000) + "s";
 
     msg = "FORM:14$DONE$Debug$T|Debug||" + urlencode(d) + "|0";
   }

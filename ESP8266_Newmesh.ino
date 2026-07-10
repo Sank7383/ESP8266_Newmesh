@@ -100,6 +100,28 @@ void setup() {
   Serial.begin(115200);
 
   configLoad();
+
+  // Route=Ethernet and ButtonVariant=Shift5 physically CANNOT coexist on
+  // this pin layout: TransportEthernet's ENC28J60 chip-select and
+  // ButtonInputShiftReg5's 74HC165 clock line are both hardcoded to GPIO15
+  // (see TransportEthernet.cpp's ETH_CS_PIN and ButtonInputShiftReg5.h's
+  // clockPin_). The old per-variant-.bin firmware never hit this because
+  // Ethernet and Shift5 button code were never compiled into the same
+  // image; this rewrite makes both runtime-selectable in one image, which
+  // makes this specific combination newly reachable and newly broken —
+  // the shift register's clock toggling every poll() corrupts the ENC28J60
+  // SPI chip-select, so Ethernet won't reliably link/get an IP at all.
+  // Logged via Serial (before the network/websocket stack exists to carry
+  // debugdata()) so it's visible on first boot, not just after a client
+  // connects.
+  if ((RouteType)myConfig.routeType == RouteType::ETHERNET &&
+      (ButtonVariant)myConfig.buttonVariant == ButtonVariant::SHIFTREG_5BTN) {
+    Serial.println("WARNING: Route Type is Ethernet AND Button Variant is Shift5 - both use "
+                    "GPIO15 (ENC28J60 CS vs HC165 clock), a hardware pin conflict. Ethernet "
+                    "will not initialize reliably. Change Button Variant (Form 12) to "
+                    "Gpio2/Gpio3Remote, or use DeviceRole::DOOR_INDICATOR (no buttons) on this unit.");
+  }
+
   g_roomAggregator.begin();
   g_buzzer.begin();
 
