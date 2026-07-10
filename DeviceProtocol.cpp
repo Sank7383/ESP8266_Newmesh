@@ -33,7 +33,7 @@ void ESPrestart() {
 // covers every variant, so handleNamedUpdate() below repurposes that same
 // "&t=" param to select an arbitrary named build instead.
 static const char *OTA_BASE_URL =
-    "http://ask4token.com/project.php?d=Arduino/NewMesh/NurseCall&p=NurseCall_ser4";
+    "http://ask4token.com/project.php?d=Arduino/Sandeep_emb_fresher/VS_Code/ESP8266_Newmesh&p=ESP8266_Newmesh";
 
 // Shared by both OTA modes below. Gated on myConfig.allowReboot — same lock
 // as the remote "Reboot"/"Reset" commands and the /reboot HTTP endpoint
