@@ -53,7 +53,10 @@ uint8_t gettime = 0;
 // see plan) — no external dependency on Espalexa.h in this build.
 
 void sendAllDevices();
-void handleBinUpdate(int local);
+// Two OTA modes, implemented in DeviceProtocol.cpp — see that file's
+// comments for the fixed-vs-named distinction and the allowReboot gating.
+void handleFixedUpdate();
+void handleNamedUpdate(const String &filename);
 int disconnectcount = 0;
 IPAddress apIP=IPAddress(0,0,0,0);
 #define dbgPrintln
@@ -787,10 +790,19 @@ void decodeString1(const char *msm, int isServer)
   {
     getFormData(msm, 2);
   }
-  else if (!strncmp(msm,"UPDATE",7))
+  else if (!strncmp(msm,"TUPDATE",7))
   {
+    // Fixed path/filename OTA - no argument, same unauthenticated-by-
+    // construction pattern as "Reboot"/"Reset" above (locked by
+    // myConfig.allowReboot inside handleFixedUpdate(), not here).
     ESP.wdtFeed();
-    handleBinUpdate(1);
+    handleFixedUpdate();
+  }
+  else if (!strncmp(msm,"UPDATE:",7))
+  {
+    // Named update - everything after "UPDATE:" is the target filename/path.
+    ESP.wdtFeed();
+    handleNamedUpdate(String(msm + 7));
   }
   else
     decodeString(msm, 0);
@@ -1531,6 +1543,23 @@ void startconnection()
               } else {
                 server.send(200, "text/html", "Allow Reboot is Off - ignored");
               }
+            });
+  server.on("/tupdate", []()
+            {
+              // Fixed path/filename OTA — same unauthenticated-GET pattern
+              // as /reboot above; handleFixedUpdate() itself enforces the
+              // Allow Reboot (Form 11) lock, so this just always calls it
+              // and lets that function decide.
+              server.send(200, "text/plain", "OTA (fixed) starting - device will restart on success");
+              handleFixedUpdate();
+            });
+  server.on("/update", []()
+            {
+              // Named OTA — ?file=<name> selects the target filename/path
+              // on myConfig.myServer. Missing/empty ?file is rejected
+              // inside handleNamedUpdate() itself.
+              server.send(200, "text/plain", "OTA (named) starting - device will restart on success");
+              handleNamedUpdate(server.arg("file"));
             });
   server.on("/send", []()
             {

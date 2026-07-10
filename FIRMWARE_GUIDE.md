@@ -294,13 +294,21 @@ Static-IP targeting was already correct before this fix and needed no change: Wi
 
 **Deliberately NOT gated**: Form 0's menu `Reboot:20` and `Factory Reset:21` selections. Those require deliberately navigating the settings UI and choosing that specific option — the intentional, expected path a technician uses — so they stay always-available regardless of `allowReboot`, matching how Factory Reset already behaved.
 
+### 9.3 OTA firmware update — fixed vs. named
+`DeviceProtocol.cpp` implements two independent OTA modes via `ESPhttpUpdate.update()`, both against the SAME base URL kept verbatim from the researched legacy firmware's `handleBinUpdate()` (`OTA_BASE_URL`): `http://ask4token.com/project.php?d=Arduino/NewMesh/NurseCall&p=NurseCall_ser4` — that PHP script is what resolves which actual `.bin` gets served server-side, not this firmware, so the host/path stay pointed at the same place the legacy firmware used.
+
+- **Fixed** (`handleFixedUpdate()`) — requests `OTA_BASE_URL` exactly as-is, the same target every time, no argument needed. Triggered by the mesh/websocket command `"TUPDATE"` (exact match, same dispatch point as `"Reboot"`/`"Reset"` in `decodeString2()`, `NewMeshNOW.h`) or the HTTP `GET /tupdate` endpoint.
+- **Named** (`handleNamedUpdate(filename)`) — requests `OTA_BASE_URL + "&t=" + filename`, where the caller supplies which build to fetch. This repurposes the legacy firmware's own `"&t=<variant-suffix>"` query param (which used to pick a different pre-compiled `.bin` per hardware `#ifdef` combo — `2b`, `5brs`, `di`, etc.) — moot now that one image covers every variant, so it's now just an arbitrary named-build selector instead. Triggered by the mesh/websocket command `"UPDATE:<filename>"` (everything after the colon is the filename) or the HTTP `GET /update?file=<filename>` endpoint. An empty/missing filename is rejected (logged via `debugdata`, nothing fetched).
+
+Both modes share `runOtaUpdate()`, which is gated on `myConfig.allowReboot` (Form 11) — the same lock as the remote `"Reboot"`/`"Reset"` commands and the `/reboot` HTTP endpoint (§9.2). This is deliberate: both OTA triggers are unauthenticated by the same construction as those (any locally-connected WebSocket client, any mesh-addressed sender who knows this device's ID, or anyone who can reach the webserver), and a successful OTA reflashes and restarts the device — at least as sensitive as a bare reboot, so it gets at least the same lock. `ESPhttpUpdate`'s default `rebootOnUpdate(true)` means a successful `HTTP_UPDATE_OK` restarts the device automatically; nothing extra to do on success. Outcomes (`HTTP_UPDATE_FAILED`/`_NO_UPDATES`/`_OK`) are traced via `debugdata()`, visible in `/forms`' Live Debug Log (§4).
+
 ## 10. Consolidated list of known gaps (searchable)
 
 - Form 13 field "Ruleset Preset" is stored but never read — no behavioral effect.
 - Form 13's `CustomState`/`CallState::CUSTOM` has no trigger wired to it anywhere — enabling it has no visible effect until something sets `mainState = CallState::CUSTOM`.
 - Form 4 "New 485 Module" and "Legacy Protocol Select" are stored but unused by the current hardware-UART-based `TransportRs485` (they mattered for the legacy SoftwareSerial implementation this replaced).
 - Form 12 slots 2–6 (Toilet/Extra/Blue/Attend/AP) have no effect on Gpio2/Gpio3Remote button variants — only slots 0/1 are read by those drivers, with no UI indication that the other 5 dropdowns are inert for the selected variant.
-- OTA firmware update is a stub (`handleBinUpdate` just logs and returns) — explicitly out of scope, flagged as a valuable fast-follow since one image now covers every variant.
+- OTA firmware update is plain HTTP with no signing/cert-pinning (`ESP8266httpUpdate` default behavior, matching every other network call in this codebase) — acceptable for a trusted local network, but a spoofed/MITM'd `myServer` could push arbitrary firmware. See §9.3 for the two OTA modes now implemented.
 - LED data pin is fixed to GPIO0 for all roles/PCB revisions.
 - When `toiletid` names a distinct device, this bed unit's pull-cord press sends one fire-and-forget `Call(1)` under that id (§6/§8) — there is no corresponding "clear"/cancel event wired for that case (unlike the shared-unit case, where `CANCEL` on the IDLE+toiletCallActive ladder clears it). If a given site's pull-cord hardware produces a distinct release/reset signal, it isn't currently routed to send a clearing `0` status for the separate-toiletid case — scoped out pending a concrete hardware spec for that signal.
 

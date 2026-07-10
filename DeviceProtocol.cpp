@@ -4,11 +4,12 @@
 #include "DeviceState.h"
 #include "TransportEthernet.h"
 #include <ESP8266WiFi.h>
+#include <ESP8266httpUpdate.h>
 #include <string.h>
 #include <ctype.h>
 
 // ==========================================
-// Restart / OTA stub
+// Restart / OTA
 // ==========================================
 
 void ESPrestart() {
@@ -23,12 +24,57 @@ void ESPrestart() {
   ESP.restart();
 }
 
-void handleBinUpdate(int local) {
-  // OTA is explicitly out of scope for v1 (see plan) — one firmware image
-  // now covers every variant, which makes OTA more valuable than under the
-  // old per-variant .bin scheme, so this is flagged as a fast-follow rather
-  // than silently dropped.
-  debugdata("INFO: OTA update not available in this build");
+// Same production update endpoint as the researched legacy firmware's
+// handleBinUpdate() (host + project.php path/d=/p= params kept verbatim) —
+// that PHP script is what resolves which actual .bin gets served server-
+// side; this firmware only ever needs to hit the same base URL. The legacy
+// code appended "&t=<variant-suffix>" to pick a different pre-compiled
+// .bin per hardware combo (2b/5b/5brs/di/...) — moot now that one image
+// covers every variant, so handleNamedUpdate() below repurposes that same
+// "&t=" param to select an arbitrary named build instead.
+static const char *OTA_BASE_URL =
+    "http://ask4token.com/project.php?d=Arduino/NewMesh/NurseCall&p=NurseCall_ser4";
+
+// Shared by both OTA modes below. Gated on myConfig.allowReboot — same lock
+// as the remote "Reboot"/"Reset" commands and the /reboot HTTP endpoint
+// (§9.2/NewMeshNOW.h) — a successful OTA reflashes and restarts the device,
+// which is at least as sensitive as a bare reboot, and both OTA triggers
+// (mesh/websocket command, HTTP endpoint) are unauthenticated by the same
+// construction those are.
+static void runOtaUpdate(const String &url) {
+  if (!myConfig.allowReboot) {
+    debugdata("OTA: Allow Reboot is Off - update request ignored (OTA reflashes the device, gated the same as remote reboot)");
+    return;
+  }
+
+  debugdata(String("OTA: starting update from " + url).c_str());
+  ESP.wdtFeed();
+  WiFiClient client;
+  t_httpUpdate_return ret = ESPhttpUpdate.update(client, url);
+  switch (ret) {
+    case HTTP_UPDATE_FAILED:
+      debugdata(String("OTA: FAILED (" + String(ESPhttpUpdate.getLastError()) + "): " +
+                        ESPhttpUpdate.getLastErrorString()).c_str());
+      break;
+    case HTTP_UPDATE_NO_UPDATES:
+      debugdata("OTA: no update available (server reported this device is already current)");
+      break;
+    case HTTP_UPDATE_OK:
+      debugdata("OTA: OK - device is restarting");
+      break;
+  }
+}
+
+void handleFixedUpdate() {
+  runOtaUpdate(String(OTA_BASE_URL));
+}
+
+void handleNamedUpdate(const String &filename) {
+  if (filename.length() == 0) {
+    debugdata("OTA: named update requested with no filename - ignored");
+    return;
+  }
+  runOtaUpdate(String(OTA_BASE_URL) + "&t=" + filename);
 }
 
 // ==========================================
