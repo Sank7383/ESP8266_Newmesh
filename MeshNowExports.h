@@ -33,6 +33,11 @@ bool AmServer();
 bool isConnected();
 void setup_AP(bool forceRestart = false);
 void startconnection();
+// Joins an additional WiFi-STA AP target (mesh peer, or myConfig.mySSID
+// itself) without disturbing anything already connected — WiFiMulti-style
+// add, not a replace. TransportNetworkPriority calls this to fall back onto
+// mySSID when Ethernet was the priority interface but never came up.
+bool addAP(const char *ssid, const char *passphrase);
 // Opens the WebSocket/Socket.IO connection to myConfig.myServer (or a mesh
 // gateway) — called by NewMeshNOW.h's own WiFi gotIP handler for the WiFi
 // route; TransportEthernet::begin() calls it directly for the Ethernet

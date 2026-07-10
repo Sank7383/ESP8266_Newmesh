@@ -13,8 +13,9 @@
 // reset onto the current layout; every unit will need its settings redone
 // once after this flashes. Bumped 2 -> 3 for the added toiletIndicationOnIdle
 // field. Bumped 3 -> 4 for the added statusReportIntervalSec field. Bumped
-// 4 -> 5 for the added networkType field.
-#define CONFIG_STRUCT_VERSION 5u
+// 4 -> 5 for the added networkType field. Bumped 5 -> 6 for the added
+// allowNetworkFallback/networkFailoverSec fields.
+#define CONFIG_STRUCT_VERSION 6u
 #define CONFIG_EEPROM_OFFSET 100
 
 DeviceConfig myConfig;
@@ -121,6 +122,8 @@ void configApplyDefaults(DeviceConfig &c) {
   c.toiletIndicationOnIdle = true;
   c.statusReportIntervalSec = 30;
   c.networkType = (uint8_t)NetworkType::WIFI;
+  c.allowNetworkFallback = true;
+  c.networkFailoverSec = 30;
 }
 
 bool configLoad() {

@@ -16,19 +16,19 @@
 
 enum class RouteType : uint8_t { MESH_WIFI = 0, RS485 = 1, ETHERNET = 2 };
 
-// Which physical network interface this device's IP layer rides on —
-// deliberately SEPARATE from RouteType (which is about how CALL STATUS
-// gets reported: mesh-WiFi/RS485/Ethernet). networkType instead governs
-// two things regardless of route: (1) whether WiFi-STA even attempts to
-// join myConfig.mySSID/the mesh-peer APs at boot (skipped entirely for
-// ETHERNET — see startconnection() in NewMeshNOW.h), and (2) which
-// interface myConfig.myIP/myGateway/myNetmask apply to (WiFi via
-// gotIpEventHandler when STA connects to mySSID specifically; Ethernet via
-// TransportEthernet::begin()) — the other interface always falls back to
-// DHCP, unaffected by this setting. NOTE: ETHERNET here only actually
-// brings up hardware if RouteType (Form 11) is ALSO Ethernet — this field
-// does not create Ethernet connectivity by itself, it only stops WiFi from
-// getting in the way of it.
+// Which physical network interface is the PRIORITY IP interface —
+// authoritative regardless of RouteType (Form 11): selecting ETHERNET here
+// brings up the ENC28J60 and tries it first even if Route Type is still set
+// to MeshWiFi, and vice versa. RouteType now only distinguishes RS485 (its
+// own bus, entirely separate) from "IP network" — for anything other than
+// RS485, networkType is what actually decides WiFi vs Ethernet, via
+// TransportFactory -> TransportNetworkPriority. Governs: (1) which
+// interface's hardware is brought up first at boot (WiFi-STA join of
+// mySSID, or TransportEthernet's deferred ENC28J60 bring-up), and (2) which
+// interface myConfig.myIP/myGateway/myNetmask apply to — the other
+// interface always falls back to DHCP if it ends up used via fallback
+// below. See allowNetworkFallback/networkFailoverSec for what happens if
+// the priority interface doesn't come up in time.
 enum class NetworkType : uint8_t { WIFI = 0, ETHERNET = 1 };
 
 enum class ButtonVariant : uint8_t {
@@ -208,8 +208,16 @@ struct DeviceConfig {
   // in DeviceProtocol.cpp's Form 2 parser. See the .ino's loop() for where
   // this drives the actual resend.
   uint32_t          statusReportIntervalSec;
-  // See NetworkType above — Form 1, independent of routeType.
+  // See NetworkType above — Form 1, authoritative over routeType for WiFi
+  // vs Ethernet selection.
   uint8_t           networkType;
+  // If the priority interface (networkType) hasn't reached isNetworkUp()
+  // within networkFailoverSec of boot, TransportNetworkPriority brings up
+  // the OTHER interface's hardware as a fallback — Form 1, "Allow Network
+  // Fallback" / "Network Failover Sec". Once a fallback interface links, it
+  // stays active for the rest of this boot (no continuous re-racing).
+  bool              allowNetworkFallback;
+  uint16_t          networkFailoverSec;   // validated to >= 10 in DeviceProtocol.cpp's Form 1 parser
 };
 
 extern DeviceConfig myConfig;

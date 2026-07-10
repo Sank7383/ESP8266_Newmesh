@@ -117,15 +117,25 @@ void sendFormData(int formno) {
     msg = "FORM:1$DONE$Network Settings";
     appendText(msg, "SSID", myConfig.mySSID);
     appendText(msg, "Password", myConfig.myPass);
-    // Which interface myIP/myGateway/myNetmask below apply to, and whether
-    // WiFi-STA even attempts mySSID at all — see NetworkType in
-    // NurseCallConfig.h. Selecting Ethernet here means SSID/Password are
-    // simply ignored (no need to fill them with a placeholder just to
-    // "complete" the form) — WiFi-STA join is skipped entirely at boot.
+    // Which interface is tried FIRST, and which interface myIP/myGateway/
+    // myNetmask below apply to — see NetworkType in NurseCallConfig.h. This
+    // is authoritative over Form 11's Route Type: selecting Ethernet here
+    // brings up the ENC28J60 and tries it first even if Route Type is still
+    // MeshWiFi. Selecting Ethernet also means WiFi-STA's initial join of
+    // SSID/Password above is skipped at boot (no need to fill them with a
+    // placeholder) — unless Allow Network Fallback below brings it up later.
     appendDropdown(msg, "Network Type", "WiFi:0#Ethernet:1", myConfig.networkType);
     appendText(msg, "Static IP (blank = DHCP)", myConfig.myIP);
     appendText(msg, "Gateway", myConfig.myGateway);
     appendText(msg, "Subnet Mask", myConfig.myNetmask);
+    // If the priority interface above hasn't linked within Network Failover
+    // Sec of boot, the OTHER interface's hardware is tried as a fallback
+    // (see TransportNetworkPriority) — e.g. Ethernet cable unplugged falls
+    // back to joining SSID/Password, or a bad/out-of-range WiFi falls back
+    // to Ethernet if wired. Once a fallback interface links it stays active
+    // for the rest of this boot, it does not race back and forth.
+    appendDropdown(msg, "Allow Network Fallback", "No:0#Yes:1", myConfig.allowNetworkFallback ? 1 : 0);
+    appendText(msg, "Network Failover Sec (min 10)", String(myConfig.networkFailoverSec));
   }
   else if (formno == 2) {
     msg = "FORM:2$DONE$Device Settings";
@@ -303,6 +313,11 @@ void getFormData(const char *formdata1, int socketnumber) {
         else if (argk == 3) copyString(myConfig.myIP, argv, sizeof(myConfig.myIP));
         else if (argk == 4) copyString(myConfig.myGateway, argv, sizeof(myConfig.myGateway));
         else if (argk == 5) copyString(myConfig.myNetmask, argv, sizeof(myConfig.myNetmask));
+        else if (argk == 6) myConfig.allowNetworkFallback = (clampEnum(argv.toInt(), 1) == 1);
+        else if (argk == 7) {
+          long secs = argv.toInt();
+          myConfig.networkFailoverSec = (uint16_t)((secs < 10) ? 10 : secs);
+        }
       }
       else if (formid == 2) {
         if (argk == 0) copyString(myConfig.myDeviceName, argv, sizeof(myConfig.myDeviceName));
